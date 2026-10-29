@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
@@ -27,18 +28,18 @@ func TestPanelModelsBusyFailureDoesNotBlockCache(t *testing.T) {
 	auth.SetGlobalEnabled(true)
 	defer auth.SetGlobalEnabled(prev)
 
-	var cfgHits, busyHits int
+	var cfgHits, busyHits atomic.Int64
 	up := &upstream.Client{
 		HTTP: &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
 			status := 200
 			var body string
 			switch {
 			case strings.HasSuffix(r.URL.Path, "/v2/chat/busy"):
-				busyHits++
+				busyHits.Add(1)
 				status = http.StatusNotFound
 				body = `{"error_msg":"404 Route Not Found"}`
 			case strings.HasSuffix(r.URL.Path, "/v3/config"):
-				cfgHits++
+				cfgHits.Add(1)
 				body = `{"code":0,"data":{"models":[` +
 					`{"id":"fast-model","name":"Fast","maxInputTokens":200000,"maxOutputTokens":32000},` +
 					`{"id":"gpt-6-astra","name":"GPT-6-Astra","maxInputTokens":1000000,"maxOutputTokens":128000,` +
@@ -82,10 +83,10 @@ func TestPanelModelsBusyFailureDoesNotBlockCache(t *testing.T) {
 	if _, ok := first["busy_errs"]; !ok {
 		t.Errorf("繁忙度失败应在 busy_errs 里可见（不静默）: %v", first)
 	}
-	if cfgHits == 0 {
+	if cfgHits.Load() == 0 {
 		t.Fatal("首轮应真探过 /v3/config")
 	}
-	cfgAfterFirst := cfgHits
+	cfgAfterFirst := cfgHits.Load()
 
 	// 第二轮：目录缓存必须已写入（此前的实现因为 busy 404 恒非空而永不写缓存）。
 	code, second := call()
@@ -94,9 +95,9 @@ func TestPanelModelsBusyFailureDoesNotBlockCache(t *testing.T) {
 	}
 	if cached, _ := second["cached"].(bool); !cached {
 		t.Fatalf("繁忙度失败后目录仍应进缓存，实际 cached=%v（cfgHits=%d busyHits=%d）",
-			second["cached"], cfgHits, busyHits)
+			second["cached"], cfgHits.Load(), busyHits.Load())
 	}
-	if cfgHits != cfgAfterFirst {
-		t.Fatalf("命中缓存后不应再探 /v3/config，首轮 %d → 现在 %d", cfgAfterFirst, cfgHits)
+	if cfgHits.Load() != cfgAfterFirst {
+		t.Fatalf("命中缓存后不应再探 /v3/config，首轮 %d → 现在 %d", cfgAfterFirst, cfgHits.Load())
 	}
 }
