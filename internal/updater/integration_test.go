@@ -161,8 +161,9 @@ func TestInstallReplacesRestartsAndRecovers(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// 夹具进程：调 Install 排好 helper 后退出（helper 等它退出才替换文件）。
-			cmd := exec.Command(executable, "-test.run=^TestInstallFixtureProcess$", "-test.timeout=40s")
+			// 夹具必须运行临时副本，不能更新仍在运行的父测试程序。
+			// Linux 上替换父测试 inode 会让后续 os.Executable 指向已删除的 .old。
+			cmd := exec.Command(target, "-test.run=^TestInstallFixtureProcess$", "-test.timeout=40s")
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(),
 				"WB2API_UPDATE_FIXTURE="+dir,
