@@ -59,7 +59,7 @@ if (btnNav && navScrim) {
   btnNav.onclick = () => navSet(!navEl.classList.contains('open'));
   navScrim.onclick = () => navSet(false);
 }
-addEventListener('keydown', e => { if (e.key === 'Escape') navSet(false); });
+addEventListener('keydown', e => { if (e.key === 'Escape') { navSet(false); opsSetFullscreen(false); } });
 
 /* ── 请求 ─────────────────────────────────────────────────────────── */
 async function api(path, opts = {}) {
@@ -449,10 +449,11 @@ $('btnLogout').onclick = () => {
 };
 
 /* ── 路由 ─────────────────────────────────────────────────────────── */
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', balhist: '余额趋势', taskscenter: '任务中心', models: '模型与档位', config: '配置', events: '请求事件日志', logs: '运行日志' };
+const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', balhist: '余额趋势', taskscenter: '任务中心', models: '模型与档位', config: '配置', ops: '运维监控', events: '请求事件日志', logs: '运行日志' };
 function go(v) {
   navSet(false);
   view = v;
+  if (v !== 'ops') opsSetFullscreen(false);
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
   $('ttl').textContent = TITLES[v];
@@ -461,6 +462,7 @@ function go(v) {
   // 切到日志视图：本地窗口为空（首次）时全量拉一次；已有窗口则继续增量。
   // 注意**不要**在每次切视图时 resetLogWindow()——那会把增量游标清掉，下一轮
   // 又变成全量拉，白白丢掉增量带来的收益。
+  if (v === 'ops') loadOps();
   if (v === 'events') loadEvents();
   if (v === 'logs') { if (!logRows.length) resetLogWindow(); loadLogs(); }
   if (v === 'usage') loadUsage();
@@ -484,6 +486,8 @@ setTimeout(() => {
 let accRealmFilter = 'all';
 let lastAccountsList = [];
 let accSort = { key: '', direction: 1 };
+const ACC_PAGE_SIZE = 10;
+let accPage = 1;
 
 function renderAccounts(list) {
   lastAccountsList = Array.isArray(list) ? list : [];
@@ -511,6 +515,12 @@ function renderAccounts(list) {
     filtered = lastAccountsList.filter(s => s.realm === 'global');
   }
   filtered = sortedAccounts(filtered);
+  const pages = Math.max(1, Math.ceil(filtered.length / ACC_PAGE_SIZE));
+  accPage = Math.max(1, Math.min(accPage, pages));
+  if ($('accPageInfo')) $('accPageInfo').textContent = '共 ' + filtered.length + ' 个 · 第 ' + accPage + ' / ' + pages + ' 页 · 每页 10 个';
+  if ($('accPrev')) $('accPrev').disabled = accPage <= 1;
+  if ($('accNext')) $('accNext').disabled = accPage >= pages;
+
 
   if (!filtered.length) {
     if (!total) {
@@ -524,7 +534,7 @@ function renderAccounts(list) {
   }
   // 有总额度（credits_total）→ 进度条按自身 剩余/总额 百分比；旧数据无总额 → 退回池内最高=100%
   const maxCred = Math.max(1, ...filtered.map(s => s.credits || 0));
-  setHTML(tb, filtered.map(s => {
+  setHTML(tb, filtered.slice((accPage - 1) * ACC_PAGE_SIZE, accPage * ACC_PAGE_SIZE).map(s => {
     const bl = (new Date(s.breaker_until || 0) - Date.now()) / 1000;
     const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
@@ -674,6 +684,7 @@ function updateAccountSortControls() {
 
 function toggleAccountSort(key) {
   if (key !== 'status' && key !== 'credits') return;
+  accPage = 1;
   accSort = { key, direction: accSort.key === key ? -accSort.direction : (key === 'credits' ? -1 : 1) };
   renderAccounts(lastAccountsList);
 }
@@ -915,6 +926,8 @@ $('btnActivityAll').onclick = async () => {
   try { await api('activity_all', { method: 'POST' }); toast('活跃上报已开始，结果见日志', 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 };
+if ($('accPrev')) $('accPrev').onclick = () => { accPage--; renderAccounts(lastAccountsList); };
+if ($('accNext')) $('accNext').onclick = () => { accPage++; renderAccounts(lastAccountsList); };
 if ($('accSortStatus')) $('accSortStatus').onclick = () => toggleAccountSort('status');
 if ($('accSortCredits')) $('accSortCredits').onclick = () => toggleAccountSort('credits');
 if ($('accRealmTabs')) {
@@ -924,6 +937,7 @@ if ($('accRealmTabs')) {
     const r = btn.dataset.realm;
     if (r === accRealmFilter) return;
     accRealmFilter = r;
+    accPage = 1;
     renderAccounts(lastAccountsList);
   });
 }
@@ -2108,6 +2122,7 @@ function refreshVisible() {
   if (view === 'accounts') {
     loadOverview(true);
   }
+  else if (view === 'ops' && $('opsAuto').checked) loadOps();
   else if (view === 'logs') loadLogs();
   else if (view === 'taskscenter') reattachQueueView();
 }
@@ -5096,4 +5111,184 @@ if ($('btnEventExport')) $('btnEventExport').onclick = () => {
   a.download = 'request-events-' + new Date().toISOString().slice(0, 10) + '.json';
   a.click();
   URL.revokeObjectURL(url);
+};
+
+/* ── 运维监控 ────────────────────────────────────────────────────── */
+let opsData = null, opsBusy = false, opsGeneration = 0, opsDetailPage = 1, opsTokenPage = 1;
+let opsAlertEvents = [], opsAlertActive = new Set();
+const OPS_DEFAULTS = { error: 5, latency: 30 };
+let opsThresholds = { ...OPS_DEFAULTS };
+try {
+  const saved = JSON.parse(localStorage.getItem('wb2api.ops.thresholds') || '{}');
+  if (saved.error >= 1 && saved.error <= 100 && saved.latency >= 1 && saved.latency <= 3600) opsThresholds = saved;
+} catch (_) {}
+const opsNum = n => Number(n || 0).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+const opsMs = n => opsNum(Number(n || 0) / 1000) + ' s';
+const opsTime = t => new Date(t).toLocaleString('zh-CN', { hour12: false });
+function opsOptions(id, values, label) {
+  const el = $(id), current = el.value;
+  const list = values.slice();
+  if (current && !list.includes(current)) list.unshift(current);
+  setHTML(el, '<option value="">' + label + '</option>' + list.map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join(''));
+  el.value = current;
+}
+function opsQuery() {
+  const q = new URLSearchParams({ window: $('opsWindow').value, model: $('opsModel').value, account: $('opsAccount').value });
+  if (q.get('window') === 'custom') {
+    const a = new Date($('opsFrom').value), b = new Date($('opsTo').value);
+    if (!Number.isFinite(+a) || !Number.isFinite(+b) || b <= a) throw new Error('请填写有效的起止时间');
+    q.set('from', a.toISOString()); q.set('to', b.toISOString());
+  }
+  return q.toString();
+}
+async function loadOps() {
+  if (opsBusy) return;
+  const generation = opsGeneration;
+  opsBusy = true;
+  $('opsRefresh').disabled = true;
+  try {
+    const result = await api('ops?' + opsQuery());
+    if (generation !== opsGeneration) return;
+    opsData = result;
+    renderOps();
+  } catch (e) {
+    if (generation === opsGeneration) {
+      $('opsWarning').textContent = '读取失败：' + e.message + (opsData ? '；下方保留上次成功数据。' : '');
+      $('opsHealth').textContent = '数据读取失败';
+    }
+  } finally {
+    opsBusy = false; $('opsRefresh').disabled = false;
+    if (generation !== opsGeneration && view === 'ops') loadOps();
+  }
+}
+function opsChart(id, points, series) {
+  const el = $(id);
+  if (!points.length) { setHTML(el, '<div class="empty">暂无数据</div>'); return; }
+  const w = 560, h = 140, left = 45;
+  const maxima = series.map(s => Math.max(1, ...points.map(p => Number(s.value(p) || 0))));
+  const max = maxima[0];
+  const path = (s, scale) => points.map((p, i) => (i ? 'L' : 'M') + (left + i * (w-left)/Math.max(1,points.length-1)).toFixed(2) + ',' + (h - s.value(p)/scale*(h-12)).toFixed(2)).join(' ');
+  const lines = series.map((s,i) => '<path d="' + path(s,maxima[i]) + '" stroke="' + s.color + '" fill="none" stroke-width="2"/>').join('');
+  const tips = points.map((p,i) => '<rect x="'+(left+i*(w-left)/points.length)+'" y="0" width="'+((w-left)/points.length)+'" height="'+h+'" fill="transparent"><title>'+esc(opsTime(p.time)+' · '+series.map(s=>s.label+': '+opsNum(s.value(p))).join(' / '))+'</title></rect>').join('');
+  setHTML(el, '<div class="hint">'+series.map((s,i)=>'<span style="color:'+s.color+'">● '+esc(s.label)+(series.length>1?(i?'（右轴）':'（左轴）'):'')+'</span>').join('　')+'</div><svg role="img" aria-label="'+esc(series.map(s=>s.label).join(' / '))+'趋势" viewBox="0 0 580 180"><path d="M45 0V140H560" stroke="var(--line)" fill="none"/><text x="0" y="16" fill="var(--ink-2)" font-size="11">'+esc(opsNum(max))+'</text><text x="24" y="142" fill="var(--ink-2)" font-size="11">0</text>'+lines+tips+(series.length>1?'<text x="575" y="16" text-anchor="end" fill="'+series[1].color+'" font-size="11">'+esc(opsNum(maxima[1]))+'</text>':'')+'<text x="45" y="166" fill="var(--ink-2)" font-size="11">'+esc(new Date(points[0].time).toLocaleTimeString())+'</text><text x="560" y="166" text-anchor="end" fill="var(--ink-2)" font-size="11">'+esc(new Date(points[points.length-1].time).toLocaleTimeString())+'</text></svg>');
+}
+function opsBars(id, rows) {
+  const max = Math.max(1,...rows.map(r=>r[1]));
+  setHTML($(id), rows.length ? rows.map(([name,n])=>'<div class="ops-bar"><span>'+esc(name)+'</span><span><i style="width:'+Math.max(0,n/max*100)+'%"></i></span><b>'+opsNum(n)+'</b></div>').join('') : '<div class="empty">暂无错误</div>');
+}
+function opsEvaluateAlerts() {
+  const d = opsData.data, t = d.totals, p = opsData.pool, archive = opsData.archive;
+  const errorRate = t.requests ? t.failed/t.requests*100 : 0;
+  const checks = [
+    ['pool', p.healthy === 0, p.total ? '账号池当前没有可用账号，检查冷却、禁用与暂停状态。' : '账号池为空，无法处理模型请求。'],
+    ['errors', t.requests > 0 && errorRate >= opsThresholds.error, '窗口错误率 '+opsNum(errorRate)+'%，达到 '+opsThresholds.error+'% 告警线。'],
+    ['latency', t.requests > 0 && t.p95 >= opsThresholds.latency*1000, 'P95 请求时长 '+opsMs(t.p95)+'，达到 '+opsThresholds.latency+' 秒告警线。'],
+    ['archive', !!archive.last_error || archive.dropped_writes > 0, '请求归档异常：'+(archive.last_error || '存在丢弃写入')]
+  ];
+  const active = new Set();
+  for (const [key,on,message] of checks) {
+    if (on) active.add(key);
+    if (on !== opsAlertActive.has(key)) opsAlertEvents.unshift({time:opsData.collected_at,text:(on?'触发 · ':'恢复 · ')+message+' ['+$('opsWindow').selectedOptions[0].textContent+' / '+($('opsModel').value || '全部模型')+' / '+($('opsAccount').value || '全部账号')+']',on});
+  }
+  opsAlertActive = active; opsAlertEvents = opsAlertEvents.slice(0,50);
+  $('opsHealth').textContent = active.size ? '需要关注 · '+active.size+' 项' : t.requests ? '运行正常' : '待机';
+  setHTML($('opsDiagnosis'), checks.filter(c=>c[1]).map(c=>'<p class="tag warn" style="margin:4px">'+esc(c[2])+'</p>').join('') || '<p class="hint">当前采样未触发告警。</p>');
+  setHTML($('opsAlerts'), opsAlertEvents.map(e=>'<p style="padding:8px 0;border-bottom:1px solid var(--line)"><span class="hint">'+esc(opsTime(e.time))+'</span><br><span class="tag '+(e.on?'warn':'ok')+'">'+esc(e.text)+'</span></p>').join('') || '<div class="empty">暂无告警事件</div>');
+}
+function renderOps() {
+  const {data:d,system:s,pool:p,archive:a} = opsData, t = d.totals;
+  const secs = (new Date(d.to)-new Date(d.from))/1000;
+  $('opsUpdated').textContent = '更新于 '+opsTime(opsData.collected_at);
+  $('opsWarning').textContent = d.truncated ? '窗口数据不完整：包含进程启动前时段，或超过 50,000 条保留上限；指标仅统计已保留请求。' : '';
+  opsOptions('opsModel', d.model_options || [], '全部模型');
+  opsOptions('opsAccount', d.account_options || [], '全部账号');
+  const kpis = [
+    ['总请求',opsNum(t.requests),'失败 '+opsNum(t.failed)+' · 限流 '+opsNum(t.limited)],
+    ['成功率',t.requests ? opsNum(t.succeeded/t.requests*100)+'%' : '—','按请求完整完成结果计算'],
+    ['平均 QPS',opsNum(t.requests/secs),'窗口内完成请求 / 窗口秒数'],
+    ['总 Token',opsNum(t.total_tokens),'输入 '+opsNum(t.prompt_tokens)+' · 输出 '+opsNum(t.output_tokens)],
+    ['平均请求时长',t.requests ? opsMs(t.avg_duration_ms) : '—','P50 '+(t.requests?opsMs(t.p50):'—')+' · P90 '+(t.requests?opsMs(t.p90):'—')],
+    ['P95 / P99',t.requests?opsMs(t.p95)+' / '+opsMs(t.p99):'—','请求完成耗时'],
+    ['平均首字节',t.ttfb_samples?opsMs(t.avg_ttfb_ms):'—','有效样本 '+opsNum(t.ttfb_samples)+'；TTFB'],
+    ['平均输出 TPS',t.tps_samples?opsNum(t.output_tps):'—','有效样本 '+opsNum(t.tps_samples)+'；输出 Token / 首字节后秒数']
+  ];
+  setHTML($('opsKpis'),kpis.map(([name,value,note])=>'<div class="ops-kpi"><span class="hint">'+esc(name)+'</span><strong>'+esc(value)+'</strong><small class="hint">'+esc(note)+'</small></div>').join(''));
+  setHTML($('opsSystem'),[
+    '运行 '+dur(s.uptime_sec), 'Go 堆内存 '+opsNum(s.heap_bytes/1048576)+' MiB',
+    'Go 运行时内存 '+opsNum(s.runtime_bytes/1048576)+' MiB','协程 '+opsNum(s.goroutines),'GC '+opsNum(s.gc_cycles),
+    '可用账号 '+p.healthy+' / '+p.total,'冷却 '+p.cooling+' · 禁用 '+p.disabled+' · 暂停 '+p.paused,
+    '请求归档 '+(a.enabled?'已开启':'已关闭')+' · '+opsNum(a.bytes/1048576)+' MiB · 丢弃 '+opsNum(a.dropped_writes),
+    'Redis 模式 '+(s.redis_mode || '未配置')
+  ].map(x=>'<span>'+esc(x)+'</span>').join(''));
+  const accounts=(p.accounts || []).filter(x=>x.in_flight>0).sort((a,b)=>b.in_flight-a.in_flight);
+  setHTML($('opsConcurrency'),'<p style="padding:12px 0"><b style="font-size:30px">'+opsNum(d.in_flight)+'</b> 个全局在途请求 · '+p.full+' 个账号达到在途上限</p>'+accounts.slice(0,10).map(x=>'<div class="ops-bar"><span>'+esc(x.nickname || x.uid.slice(0,8))+'</span><span><i style="width:'+Math.min(100,x.in_flight/Math.max(1,d.in_flight)*100)+'%"></i></span><b>'+x.in_flight+'</b></div>').join('')+(accounts.length>10?'<p class="hint">显示并发最高的 10 个账号</p>':''));
+  opsChart('opsRetries',d.points,[{label:'重试次数',color:'#a38bf4',value:p=>p.retries}]);
+  opsChart('opsThroughput',d.points,[{label:'QPS',color:'#5795ef',value:p=>p.requests/d.step_sec},{label:'Token/s',color:'#36bd8a',value:p=>p.tokens/d.step_sec}]);
+  opsChart('opsErrorTrend',d.points,[{label:'错误数',color:'#ee726a',value:p=>p.errors}]);
+  opsBars('opsLatency',['≤1s','1–3s','3–5s','5–10s','10–30s','30–60s','>60s'].map((x,i)=>[x,d.histogram[i]]));
+  const names={limited:'限流 429/529',server:'HTTP 5xx',client:'HTTP 4xx / 其他',stream_error:'流错误',interrupted:'中断',http_error:'HTTP 错误'};
+  opsBars('opsErrors',Object.entries(d.errors).map(([k,n])=>[names[k] || k,n]));
+  opsEvaluateAlerts(); renderOpsTokens(); renderOpsDetails();
+  const jobs=(opsData.jobs || []).slice().sort((a,b)=>new Date(b.updated_at || b.started_at || 0)-new Date(a.updated_at || a.started_at || 0));
+  setHTML($('opsJobs'),jobs.slice(0,10).map(j=>'<p style="padding:7px 0">'+esc(j.uid)+' · '+esc(j.status)+'<br><span class="hint">'+esc(j.message || j.error || '')+'</span></p>').join('') || '<div class="empty">暂无后台任务</div>');
+}
+function opsPage(prefix, page, count) {
+  const total=Math.max(1,Math.ceil(count/10)), value=Math.max(1,Math.min(page,total));
+  $(prefix+'Page').textContent=value+' / '+total+' · 共 '+count+' 条';
+  $(prefix+'Prev').disabled=value<=1; $(prefix+'Next').disabled=value>=total;
+  return value;
+}
+function renderOpsTokens() {
+  if (!opsData) return;
+  const rows=opsData.data.models;
+  opsTokenPage=opsPage('opsTokens',opsTokenPage,rows.length);
+  setHTML($('opsTokens'),rows.slice((opsTokenPage-1)*10,opsTokenPage*10).map(x=>'<tr>'+[
+    x.model || '未指定',opsNum(x.requests),opsNum(x.succeeded/x.requests*100)+'%',opsNum(x.prompt_tokens),opsNum(x.output_tokens),
+    x.tps_samples?opsNum(x.output_tps):'—',x.ttfb_samples?opsMs(x.avg_ttfb_ms):'—',opsMs(x.avg_duration_ms)
+  ].map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>').join('') || '<tr><td colspan="8"><div class="empty">当前窗口暂无请求</div></td></tr>');
+}
+function renderOpsDetails() {
+  if (!opsData) return;
+  const kind=$('opsLogKind').value, query=$('opsSearch').value.toLowerCase();
+  const system=kind==='system';
+  let rows=system?(opsData.logs || []).slice().reverse():(kind==='errors'?opsData.data.recent_errors:opsData.data.recent);
+  rows=rows.filter(e=>JSON.stringify(e).toLowerCase().includes(query));
+  opsDetailPage=opsPage('opsDetails',opsDetailPage,rows.length);
+  setHTML($('opsDetailsHead'),'<tr>'+(system?['时间','频道','日志']:['时间','请求 ID','模型 / 账号','结果','时长 / 首字节','操作']).map(x=>'<th>'+x+'</th>').join('')+'</tr>');
+  setHTML($('opsDetails'),rows.slice((opsDetailPage-1)*10,opsDetailPage*10).map(e=>system?'<tr><td>'+esc(opsTime(e.ts))+'</td><td>'+esc(e.ch)+'</td><td style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(e.text)+'</td></tr>':'<tr><td>'+esc(opsTime(e.time))+'</td><td>'+esc(e.request_id)+'</td><td>'+esc(e.model)+'<br><small>'+esc(e.account)+'</small></td><td><span class="tag '+(e.ok?'ok':'bad')+'">'+esc(e.status+' · '+e.outcome)+'</span></td><td>'+opsMs(e.duration_ms)+' / '+(e.ttfb_ms?opsMs(e.ttfb_ms):'—')+'</td><td><button class="xs" data-ops-request="'+(kind==='errors'?opsData.data.recent_errors:opsData.data.recent).indexOf(e)+'">详情</button></td></tr>').join('') || '<tr><td colspan="6"><div class="empty">暂无匹配记录</div></td></tr>');
+}
+function opsFilterChanged() {
+  opsGeneration++; opsDetailPage=opsTokenPage=1;
+  opsAlertActive = new Set();
+  $('opsDetailPanel').hidden=true;
+  loadOps();
+}
+$('opsWindow').onchange=()=>{$('opsCustom').hidden=$('opsWindow').value!=='custom'; if ($('opsWindow').value!=='custom') opsFilterChanged();};
+for (const id of ['opsModel','opsAccount','opsFrom','opsTo']) $(id).onchange=opsFilterChanged;
+$('opsRefresh').onclick=loadOps;
+function opsSetFullscreen(on) {
+  document.body.classList.toggle('ops-fullscreen',on);
+  $('opsFullscreen').textContent=on?'退出全屏':'全屏';
+}
+$('opsFullscreen').onclick=()=>opsSetFullscreen(!document.body.classList.contains('ops-fullscreen'));
+$('opsSettingsToggle').onclick=()=>{$('opsSettings').hidden=!$('opsSettings').hidden;};
+$('opsErrorThreshold').value=opsThresholds.error; $('opsLatencyThreshold').value=opsThresholds.latency;
+$('opsSaveSettings').onclick=()=>{
+  const error=Number($('opsErrorThreshold').value),latency=Number($('opsLatencyThreshold').value);
+  if (!(error>=1 && error<=100 && latency>=1 && latency<=3600)) {toast('错误率须为 1–100%，延迟须为 1–3600 秒','err');return;}
+  opsThresholds={error,latency};localStorage.setItem('wb2api.ops.thresholds',JSON.stringify(opsThresholds));
+  if (opsData) opsEvaluateAlerts();toast('告警设置已保存','ok');
+};
+for (const prefix of ['opsTokens','opsDetails']) {
+  const render = prefix === 'opsTokens' ? renderOpsTokens : renderOpsDetails;
+  $(prefix+'Prev').onclick=()=>{if(prefix==='opsTokens') opsTokenPage--;else opsDetailPage--;render();};
+  $(prefix+'Next').onclick=()=>{if(prefix==='opsTokens') opsTokenPage++;else opsDetailPage++;render();};
+}
+$('opsLogKind').onchange=()=>{opsDetailPage=1;renderOpsDetails();};
+$('opsSearch').oninput=()=>{opsDetailPage=1;renderOpsDetails();};
+$('opsShowErrors').onclick=()=>{$('opsLogKind').value='errors';opsDetailPage=1;renderOpsDetails();$('opsDetails').scrollIntoView({behavior:'smooth',block:'center'});};
+$('opsDetails').onclick=e=>{
+  const b=e.target.closest('button[data-ops-request]');if (!b || !opsData) return;
+  const row=($('opsLogKind').value==='errors'?opsData.data.recent_errors:opsData.data.recent)[Number(b.dataset.opsRequest)];if (!row) return;
+  $('opsDetail').textContent=JSON.stringify(row,null,2);$('opsDetailPanel').hidden=false;$('opsDetailPanel').open=true;
 };

@@ -759,6 +759,27 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .ip-mono { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--ink-2); }
 .ua-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ink-3); cursor: help; }
 
+
+.ops-toolbar {display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:14px 18px}
+.ops-toolbar select {width:auto;max-width:240px}
+#view-ops header select {width:auto;max-width:180px}
+#view-ops header input {width:190px;max-width:100%}
+.ops-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:16px 0}
+.ops-kpis {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0}
+.ops-kpi {border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--surface)}
+.ops-kpi strong {display:block;font-size:25px;margin:7px 0;font-variant-numeric:tabular-nums}
+.ops-chart {padding:12px 18px;min-height:220px}
+.ops-chart svg {width:100%;height:180px;overflow:visible}
+.ops-bar {display:grid;grid-template-columns:95px 1fr 55px;gap:10px;align-items:center;margin:12px 0;font-size:12px}
+.ops-bar i {display:block;min-width:2px;border-radius:4px;background:#5795ef;height:13px}
+.ops-scroll {max-height:340px;overflow:auto;padding:0 18px 12px}
+.ops-systems {display:flex;gap:18px;flex-wrap:wrap;padding:16px 18px}
+.ops-detail {white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;padding:16px}
+body.ops-fullscreen {overflow:hidden}
+.ops-fullscreen #view-ops {position:fixed;inset:0;z-index:100;overflow:auto;padding:24px;background:var(--bg)}
+#opsWarning {color:#da9130;padding:4px 18px}
+@media(max-width:1000px){.ops-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.ops-grid{grid-template-columns:minmax(0,1fr)}.ops-toolbar input,.ops-toolbar select{max-width:100%}}
 </style>
 </head>
 <body>
@@ -792,6 +813,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <li><a href="#config" data-view="config">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         配置</a></li>
+      <li><a href="#ops" data-view="ops">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
+        运维监控</a></li>
       <li><a href="#events" data-view="events">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2.5"/><path d="M5 5.5h6M5 8h6M5 10.5h3.5"/></svg>
         请求事件日志</a></li>
@@ -830,6 +854,49 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     </div>
 
     <!-- 账号池 -->
+
+    <section class="view" id="view-ops" hidden>
+      <div class="box">
+        <header><h3>运维监控 <span class="hint" id="opsHealth">读取中</span></h3><span class="grow"></span><span class="hint" id="opsUpdated"></span><button class="xs" id="opsFullscreen">全屏</button></header>
+        <div class="ops-toolbar">
+          <label>时间 <select id="opsWindow"><option value="5m">近 5 分钟</option><option value="30m">近 30 分钟</option><option value="1h" selected>近 1 小时</option><option value="6h">近 6 小时</option><option value="24h">近 24 小时</option><option value="custom">自定义</option></select></label>
+          <span id="opsCustom" hidden><input id="opsFrom" type="datetime-local" aria-label="开始时间"> — <input id="opsTo" type="datetime-local" aria-label="结束时间"></span>
+          <select id="opsModel" aria-label="模型"><option value="">全部模型</option></select>
+          <select id="opsAccount" aria-label="账号"><option value="">全部账号</option></select>
+          <button class="xs primary" id="opsRefresh">刷新</button>
+          <label><input type="checkbox" id="opsAuto" checked> 自动刷新</label>
+          <button class="xs" id="opsSettingsToggle">告警设置</button>
+        </div>
+        <div id="opsWarning" role="status"></div>
+        <div class="hint" style="padding:0 18px 14px">当前进程的最近 24 小时，最多 50,000 条完成请求；重启清空。筛选影响历史指标，在途与系统健康展示全局实时状态。</div>
+        <div class="ops-toolbar" id="opsSettings" hidden>
+          <label>错误率 ≥ <input id="opsErrorThreshold" type="number" min="1" max="100" value="5" style="width:70px"> %</label>
+          <label>P95 ≥ <input id="opsLatencyThreshold" type="number" min="1" max="3600" value="30" style="width:70px"> 秒</label>
+          <button class="xs" id="opsSaveSettings">保存</button><span class="hint">设置仅保存在当前浏览器；告警随本页采样产生，不发送外部通知。</span>
+        </div>
+      </div>
+      <div class="ops-kpis" id="opsKpis"></div>
+      <div class="box"><header><h3>系统健康</h3></header><div class="ops-systems" id="opsSystem"></div><div class="ops-scroll" id="opsDiagnosis"></div></div>
+      <div class="ops-grid">
+        <div class="box"><header><h3>当前并发</h3><span class="hint">全局实时</span></header><div class="ops-scroll" id="opsConcurrency"></div></div>
+        <div class="box"><header><h3>重试趋势</h3><span class="hint">额外上游尝试次数</span></header><div class="ops-chart" id="opsRetries"></div></div>
+        <div class="box"><header><h3>吞吐趋势</h3><span class="hint">QPS / Token 每秒</span></header><div class="ops-chart" id="opsThroughput"></div></div>
+        <div class="box"><header><h3>错误趋势</h3></header><div class="ops-chart" id="opsErrorTrend"></div></div>
+        <div class="box"><header><h3>请求时长分布</h3></header><div class="ops-chart" id="opsLatency"></div></div>
+        <div class="box"><header><h3>错误分布</h3><button class="xs" id="opsShowErrors">查看明细</button></header><div class="ops-chart" id="opsErrors"></div></div>
+      </div>
+      <div class="box"><header><h3>Token 请求统计</h3><span class="grow"></span><button class="xs" id="opsTokensPrev">上一页</button><span class="hint" id="opsTokensPage"></span><button class="xs" id="opsTokensNext">下一页</button></header><div class="tbl-wrap"><table class="acc"><thead><tr><th>模型</th><th>请求</th><th>成功率</th><th>输入 Token</th><th>输出 Token</th><th>平均输出 TPS</th><th>平均首字节</th><th>平均时长</th></tr></thead><tbody id="opsTokens"></tbody></table></div></div>
+      <div class="ops-grid">
+        <div class="box"><header><h3>告警事件</h3><span class="hint">当前浏览器本次打开期间 · 最多 50 条</span></header><div class="ops-scroll" id="opsAlerts"></div></div>
+        <div class="box"><header><h3>后台任务</h3><span class="hint">最近 10 项</span></header><div class="ops-scroll" id="opsJobs"></div></div>
+      </div>
+      <div class="box">
+        <header><h3>排障明细 <span class="hint">请求、错误、系统各保留最新 100 条；系统日志为全局数据</span></h3><span class="grow"></span><select id="opsLogKind"><option value="requests">请求明细</option><option value="errors">错误请求</option><option value="system">系统日志</option></select><input id="opsSearch" placeholder="搜索 ID / 模型 / 日志" aria-label="搜索明细"><button class="xs" id="opsDetailsPrev">上一页</button><span class="hint" id="opsDetailsPage"></span><button class="xs" id="opsDetailsNext">下一页</button></header>
+        <div class="tbl-wrap"><table class="acc"><thead id="opsDetailsHead"></thead><tbody id="opsDetails"></tbody></table></div>
+        <details id="opsDetailPanel" hidden><summary style="padding:12px 18px">选中请求详情</summary><pre class="ops-detail" id="opsDetail"></pre></details>
+      </div>
+    </section>
+
     <section class="view" id="view-accounts">
       <div class="stats">
         <div class="stat"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
@@ -887,6 +954,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <tbody id="accBody"></tbody>
         </table>
         </div>
+        <footer class="ops-toolbar" aria-label="账号分页">
+          <span class="hint" id="accPageInfo" aria-live="polite"></span><span class="grow"></span>
+          <button class="xs" id="accPrev">上一页</button><button class="xs" id="accNext">下一页</button>
+        </footer>
       </div>
 
       <!-- 模型锁池：账号池回答「哪些号不能用」，这张表回答「哪些模型不能用、还要锁多久」。

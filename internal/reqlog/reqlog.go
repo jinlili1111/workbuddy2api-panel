@@ -143,6 +143,9 @@ type Recorder struct {
 	httpSuccess int64
 	durationSum int64
 	recent      []Event
+	monitor     []Event // 有界环；独立于最近 100 条与磁盘归档
+	monitorNext int
+	evictedAt   time.Time
 	archive     *archiveWriter
 }
 
@@ -196,6 +199,7 @@ func (r *Recorder) Record(e Event) {
 		r.httpSuccess++
 	}
 	r.durationSum += e.DurationMs
+	r.recordMonitor(e)
 	r.recent = append([]Event{e}, r.recent...)
 	if len(r.recent) > recentLimit {
 		r.recent = r.recent[:recentLimit]

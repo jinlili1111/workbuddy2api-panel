@@ -49,6 +49,16 @@ assert.strictEqual(elements.accSortStatusHeading.attrs['aria-sort'],'descending'
 assert.strictEqual(elements.accSortCreditsHeading.attrs['aria-sort'],'none');
 assert.strictEqual(JSON.stringify(rows),original,'sorting must not mutate the shared snapshot');
 ctx.render([]); assert.ok(elements.accBody.innerHTML.includes('账号池是空的'));
+const many=Array.from({length:41},(_,i)=>({uid:'page-'+i,credits:i,realm:i%2?'global':'cn'}));
+vm.runInContext("accRealmFilter='all';accSort={key:'',direction:1};accPage=1;",ctx);
+ctx.render(many); assert.strictEqual(ids().length,10);assert.strictEqual(ids()[0],'page-0');
+vm.runInContext('accPage=3',ctx);ctx.render(many);assert.strictEqual(ids()[0],'page-20');
+ctx.render(many.map(x=>({...x,credits:x.credits+1})));assert.strictEqual(ids()[0],'page-20','refresh keeps current page');
+vm.runInContext('accPage=5',ctx);ctx.render(many);assert.deepStrictEqual(ids(),['page-40']);
+ctx.render(many.slice(0,20));assert.strictEqual(ids()[0],'page-10','shrinking list clamps last page');
+ctx.toggle('credits');assert.strictEqual(ids()[0],'page-19','sort resets page and sorts entire pool');
+vm.runInContext("accRealmFilter='global';accPage=1;",ctx);ctx.render(many);
+assert.strictEqual(ids().length,10);assert.strictEqual(ids()[0],'page-39','realm filtering happens before pagination');
 `
 	f, err := os.CreateTemp(t.TempDir(), "account-sort-*.cjs")
 	if err != nil {
