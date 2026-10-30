@@ -76,3 +76,31 @@ vm.runInContext(source.slice(first,last),ctx);
 		t.Fatalf("center: %v\n%s", err, out)
 	}
 }
+
+func TestLedgerRealmSwitchRejectsStaleResults(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	script := `const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync('app.js','utf8'),requests=[];
+const realm={value:'cn'},ctx={usageGeneration:0,URLSearchParams,$:()=>realm,trangeQuery:()=>new URLSearchParams(),warmUsageModelRates:async()=>{},api:q=>new Promise((resolve,reject)=>requests.push({q,resolve,reject})),renderUsage:d=>ctx.shown=d};
+vm.createContext(ctx);
+vm.runInContext(source.slice(source.indexOf('async function loadUsage()'),source.indexOf("if ($('btnUsage'))")),ctx);
+(async()=>{
+ const cn=ctx.loadUsage();await new Promise(setImmediate);realm.value='global';const global=ctx.loadUsage();await new Promise(setImmediate);
+ assert.ok(requests[0].q.includes('realm=cn'));assert.ok(requests[1].q.includes('realm=global'));
+ requests[1].resolve({realm:'global'});await global;requests[0].resolve({realm:'cn'});await cn;
+ assert.strictEqual(ctx.shown.realm,'global','late CN response must not overwrite selected global ledger');
+ realm.value='cn';const old=ctx.loadUsage();await new Promise(setImmediate);realm.value='global';const latest=ctx.loadUsage();await new Promise(setImmediate);
+ requests[3].resolve({realm:'global'});await latest;requests[2].reject(new Error('late error'));await old;
+ assert.strictEqual(ctx.shown.realm,'global','late error must not clear current data');
+})().catch(e=>{console.error(e);process.exitCode=1});`
+	path := filepath.Join(t.TempDir(), "ledger-race.cjs")
+	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(node, path).CombinedOutput(); err != nil {
+		t.Fatalf("ledger realm: %v\n%s", err, out)
+	}
+}

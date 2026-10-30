@@ -18,7 +18,7 @@ const restOpen = Object.create(null);
 let mdAll = [], mdProbes = {}, mdProbeOf = () => undefined;
 let mdLocks = [], mdRecent = [];
 let usDim = 'account', usCreditDim = 'account', usSort = 'total';
-let usageData = null;
+let usageData = null, usageGeneration = 0;
 
 const $ = id => document.getElementById(id);
 
@@ -3163,13 +3163,16 @@ async function warmUsageModelRates() {
 }
 
 async function loadUsage() {
+  const generation = ++usageGeneration;
   const q = trangeQuery('usRange', true);
   q.set('realm',$('usRealm').value || 'cn');
   try {
     await warmUsageModelRates();
     const d = await api('usage?' + q.toString());
+    if (generation !== usageGeneration) return;
     renderUsage(d);
   } catch (e) {
+    if (generation !== usageGeneration) return;
     // 失败时三块都要清干净：只改图表会留下上一次窗口的数字，看起来像"刷新成功"。
     usageData = null;
     $('usChart').innerHTML = '<div class="us-empty">读取用量失败：' + esc(e.message) + '</div>';
