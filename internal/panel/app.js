@@ -483,10 +483,12 @@ setTimeout(() => {
 /* ── 账号池 ───────────────────────────────────────────────────────── */
 let accRealmFilter = 'all';
 let lastAccountsList = [];
+let accSort = { key: '', direction: 1 };
 
 function renderAccounts(list) {
   lastAccountsList = Array.isArray(list) ? list : [];
   const tb = $('accBody');
+  updateAccountSortControls();
   const total = lastAccountsList.length;
   const globalCnt = lastAccountsList.filter(s => s.realm === 'global').length;
   const cnCnt = total - globalCnt;
@@ -508,6 +510,7 @@ function renderAccounts(list) {
   } else if (accRealmFilter === 'global') {
     filtered = lastAccountsList.filter(s => s.realm === 'global');
   }
+  filtered = sortedAccounts(filtered);
 
   if (!filtered.length) {
     if (!total) {
@@ -627,6 +630,52 @@ function renderAccounts(list) {
       ].map(html => html || '<span class="slot" aria-hidden="true"></span>').join('') +
       '</div></td></tr>';
   }).join(''));
+}
+
+// Sorting affects this table only; never reorder the shared overview snapshot.
+function accountStatusRank(s, now) {
+  if (s.disabled) return 5;
+  if (s.paused) return 4;
+  if (Math.max(s.cool_remaining_sec || 0,
+      (new Date(s.breaker_until || 0) - now) / 1000,
+      (new Date(s.degrade_until || 0) - now) / 1000) > 0) return 3;
+  if (s.reserve_blocked) return 2;
+  if (s.session_dead_fails > 0) return 1;
+  return 0;
+}
+
+function sortedAccounts(list) {
+  if (!accSort.key) return list;
+  const now = Date.now();
+  const credit = s => s.credits_total === -1 ? Infinity
+    : (typeof s.credits === 'number' && Number.isFinite(s.credits) ? s.credits : null);
+  return list.map((account, index) => ({ account, index })).sort((a, b) => {
+    const av = accSort.key === 'status' ? accountStatusRank(a.account, now) : credit(a.account);
+    const bv = accSort.key === 'status' ? accountStatusRank(b.account, now) : credit(b.account);
+    // Unknown balances stay last in either direction; equal values remain stable.
+    if (av === bv) return a.index - b.index;
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    return (av < bv ? -1 : 1) * accSort.direction;
+  }).map(row => row.account);
+}
+
+function updateAccountSortControls() {
+  for (const [key, label, id] of [['status', '状态', 'accSortStatus'], ['credits', '积分', 'accSortCredits']]) {
+    const button = $(id), heading = $(id + 'Heading');
+    const active = accSort.key === key;
+    if (button) {
+      button.textContent = label + ' ' + (active ? (accSort.direction > 0 ? '↑' : '↓') : '↕');
+      button.title = key === 'status' ? '点击切换可用优先 / 异常优先' : '按剩余积分排序，点击切换高到低 / 低到高';
+    }
+    if (heading) heading.setAttribute('aria-sort', active ? (accSort.direction > 0 ? 'ascending' : 'descending') : 'none');
+  }
+}
+
+function toggleAccountSort(key) {
+  if (key !== 'status' && key !== 'credits') return;
+  accSort = { key, direction: accSort.key === key ? -accSort.direction : (key === 'credits' ? -1 : 1) };
+  renderAccounts(lastAccountsList);
 }
 
 // renderModelLocks 模型锁池：哪些模型不能用、锁了几个号、还要锁多久。后端已按
@@ -866,6 +915,8 @@ $('btnActivityAll').onclick = async () => {
   try { await api('activity_all', { method: 'POST' }); toast('活跃上报已开始，结果见日志', 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 };
+if ($('accSortStatus')) $('accSortStatus').onclick = () => toggleAccountSort('status');
+if ($('accSortCredits')) $('accSortCredits').onclick = () => toggleAccountSort('credits');
 if ($('accRealmTabs')) {
   $('accRealmTabs').addEventListener('click', ev => {
     const btn = ev.target.closest('button[data-realm]');
