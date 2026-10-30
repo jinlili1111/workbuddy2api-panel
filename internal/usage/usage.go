@@ -546,6 +546,7 @@ type Snapshot struct {
 // 就是一小时，用户选到 14:00 时把 14:00 这一小时的桶算进来符合直觉；同时这也
 // 让 Hours 口径与历史行为逐位一致（原实现就是 ts.Before(from) 即跳过）。
 type Window struct {
+	Realm string // empty preserves the existing cross-realm API; the ledger selects one realm
 	Hours int
 	From  time.Time
 	To    time.Time
@@ -636,6 +637,9 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 	matched := 0
 	for i := range bs {
 		b := &bs[i]
+		if w.Realm != "" && b.Realm != w.Realm {
+			continue
+		}
 		if b.Scope < since || since == "" {
 			since = b.Scope
 		}

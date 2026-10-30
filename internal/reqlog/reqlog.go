@@ -244,6 +244,25 @@ func (r *Recorder) ReadArchive(limit int, filter Filter) ([]Event, error) {
 	return r.archive.read(limit, filter)
 }
 
+// ReadRecent is an explicit fallback for gateways with archiving disabled.
+// Apply the same filter as archives before limiting; never substitute out-of-range requests.
+func (r *Recorder) ReadRecent(limit int, filter Filter) []Event {
+	r.mu.Lock()
+	events := append([]Event(nil), r.recent...)
+	r.mu.Unlock()
+	sort.SliceStable(events, func(i, j int) bool { return events[i].Time.After(events[j].Time) })
+	rows := []Event{}
+	for _, e := range events {
+		if filter.match(e) {
+			rows = append(rows, e)
+			if limit > 0 && len(rows) >= limit {
+				break
+			}
+		}
+	}
+	return rows
+}
+
 // Close 刷盘并停止后台归档。
 func (r *Recorder) Close() {
 	if r == nil || r.archive == nil {

@@ -503,7 +503,7 @@ func (p *Panel) requestLogs(w http.ResponseWriter, r *http.Request) {
 		limit = 1000
 	}
 	q := r.URL.Query()
-	rows, err := p.cfg.RequestLog.ReadArchive(limit, reqlog.Filter{
+	filter := reqlog.Filter{
 		Outcome:   q.Get("outcome"),
 		Account:   q.Get("account"),
 		Model:     q.Get("model"),
@@ -511,7 +511,8 @@ func (p *Panel) requestLogs(w http.ResponseWriter, r *http.Request) {
 		UserAgent: q.Get("user_agent"),
 		From:      parseTimeParam(q.Get("from")),
 		To:        parseTimeParam(q.Get("to")),
-	})
+	}
+	rows, err := p.cfg.RequestLog.ReadArchive(limit, filter)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -521,7 +522,12 @@ func (p *Panel) requestLogs(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []reqlog.Event{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": rows, "limit": limit})
+	source := "archive"
+	if q.Get("fallback") == "memory" && !p.cfg.RequestLog.Snapshot().Archive.Enabled {
+		rows = p.cfg.RequestLog.ReadRecent(limit, filter)
+		source = "memory"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": rows, "limit": limit, "source": source})
 }
 
 // creditHistory 返回积分变动流水（新的在前），供「运行日志 → 积分历史」展示。
@@ -1330,6 +1336,11 @@ func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	win := usage.Window{}
+	win.Realm = q.Get("realm")
+	if win.Realm != "" && win.Realm != "cn" && win.Realm != "global" {
+		writeErr(w, 400, "realm must be cn or global")
+		return
+	}
 	win.From = parseTimeParam(q.Get("from"))
 	win.To = parseTimeParam(q.Get("to"))
 	if win.From.IsZero() && win.To.IsZero() {

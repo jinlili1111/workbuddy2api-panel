@@ -17,11 +17,8 @@ let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'defaul
 const restOpen = Object.create(null);
 let mdAll = [], mdProbes = {}, mdProbeOf = () => undefined;
 let mdLocks = [], mdRecent = [];
-let reqFilter = { q: '', outcome: '' };
-let reqEntries = [];
 let usDim = 'account', usCreditDim = 'account', usSort = 'total';
 let usageData = null;
-let reqRangeState = null; // 请求记录的时间范围（用量页的见 trangeState）
 
 const $ = id => document.getElementById(id);
 
@@ -449,14 +446,22 @@ $('btnLogout').onclick = () => {
 };
 
 /* ── 路由 ─────────────────────────────────────────────────────────── */
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', balhist: '余额趋势', taskscenter: '任务中心', models: '模型与档位', config: '配置', ops: '运维监控', events: '请求事件日志', logs: '运行日志' };
+const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', balhist: '余额趋势', taskscenter: '任务中心', models: '模型与档位', config: '配置', ops: '运行中心', events: '请求事件日志', logs: '运行日志' };
 function go(v) {
+  const aliases = {'ops/overview':'ops','ops/usage':'usage','ops/requests':'events','ops/system':'logs'};
+  v = aliases[v] || v;
   navSet(false);
+  const center = ['ops','usage','events','logs'].includes(v);
+  $('centerNav').hidden = !center;
+  document.querySelectorAll('[data-center]').forEach(b => {b.classList.toggle('primary',b.dataset.center === v);b.setAttribute('aria-selected',String(b.dataset.center === v));});
+  const scopes = {ops:'实时窗口：看当前可用账号、限流与请求健康；采样随进程重启清空。',usage:'历史账本：按上游尝试累计（含重试），核对账号、模型的积分消耗与 Token/积分；与客户端请求数口径不同。',events:'请求追踪：按时间与条件读取请求元数据；归档关闭时明确回落到内存最近 100 条。',logs:'系统事件：后台任务、账号异常和运行日志；全局事件不受请求筛选影响。'};
+  $('centerScope').textContent = scopes[v] || '';
+  history.replaceState(null,'',center ? ({ops:'#ops',usage:'#ops/usage',events:'#ops/requests',logs:'#ops/system'}[v]) : '#'+v);
   view = v;
   if (v !== 'ops') opsSetFullscreen(false);
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
-  document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
-  $('ttl').textContent = TITLES[v];
+  document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === (center ? 'ops' : v)));
+  $('ttl').textContent = center ? '运行中心' : TITLES[v];
   if (v === 'models' && !$('mdBody').children.length) loadModels();
   if (v === 'config') loadConfig();
   // 切到日志视图：本地窗口为空（首次）时全量拉一次；已有窗口则继续增量。
@@ -465,7 +470,7 @@ function go(v) {
   if (v === 'ops') loadOps();
   if (v === 'events') loadEvents();
   if (v === 'logs') { if (!logRows.length) resetLogWindow(); loadLogs(); }
-  if (v === 'usage') loadUsage();
+  if (v === 'usage') { loadUsage(); loadCreditHistory(); }
   if (v === 'packages') loadPackages();
   if (v === 'balhist') loadBalance();
   if (v === 'taskscenter') reattachQueueView();
@@ -479,7 +484,7 @@ document.querySelectorAll('.nav a').forEach(a => a.onclick = e => { e.preventDef
    延迟 0ms 让整份脚本先求值完，是修这一类问题最省事也最不容易再犯的办法。 */
 setTimeout(() => {
   const hash = (location.hash || '#accounts').slice(1);
-  go(hash in TITLES ? hash : 'accounts');
+  go(hash in TITLES || hash.startsWith('ops/') ? hash : 'accounts');
 }, 0);
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
@@ -1383,16 +1388,7 @@ function logLevel(text) {
 async function loadLogs() {
   const box = $('logBox');
   const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 24;
-  const limit = ($('reqLimit') && $('reqLimit').value) || 100;
-  // 时间范围由归档侧过滤（不是前端筛已拉取的条目）：区间落在更早的时间段时，
-  // 「最近 N 条」里根本不会有那些记录，必须让服务端按时间取。
-  const rq = trangeQuery('reqRange', false);
-  rq.set('limit', limit);
   try {
-    // 归档是否开启要先知道，否则无法决定 request_metrics 要不要带 recent。
-    // 先拉指标（recent=0，不带那 100 条事件），再用它决定请求记录表的数据源。
-    const metrics = await api('request_metrics?recent=0').catch(() => ({}));
-    const archiveOn = !!(metrics && metrics.archive && metrics.archive.enabled);
     // 运行日志：常态只传**新增行**（?since=），不再每 5 秒重拉 500 行。
     // logRows 是本地累积的窗口（上限 LOG_ROWS_MAX）；首次加载/手动重载时全量拉
     // （since 置空），之后走增量。
@@ -1404,22 +1400,10 @@ async function loadLogs() {
       resetLogWindow();
     }
     const lq = logSince ? '?since=' + encodeURIComponent(logSince) : '';
-    const [d, requestRows, credit, errSum] = await Promise.all([
+    const [d, errSum] = await Promise.all([
       api('logs' + lq),
-      api('request_logs?' + rq.toString()).catch(() => ({ entries: [] })),
-      api('credit_history?limit=' + creditLimitValue()).catch(() => null),
       api('error_summary').catch(() => null),
     ]);
-    // 归档开启时以归档为准——「区间内没有记录」是一个真实结果，不能回落成内存里
-    // 的最近 100 条（那会把筛选条件之外、时间范围之外的请求显示出来）。
-    // 只有归档关闭时才回落到内存指标，保证没有归档的部署仍能看到最近请求；
-    // 此时才需要 recent（第一次拉指标时已经知道归档关了，重新取一次带 recent 的）。
-    // shortcut: 归档关闭时这是两次串行请求（默认 archive 开启，只有关掉才多一个 RTT），
-    // 要省就先让 overview 透出 archive.enabled、别为此单独打一次 request_metrics。
-    const recent = archiveOn
-      ? (requestRows.entries || [])
-      : ((await api('request_metrics').catch(() => ({}))).recent || []);
-    renderRequestMetrics(metrics, recent);
     // 增量合并到本地窗口（增量拉到的行 append；全量拉到的行 replace）。
     const incoming = d.entries || [];
     if (logSince) {
@@ -1450,9 +1434,8 @@ async function loadLogs() {
     $('logNote').textContent = logCh === 'all'
       ? '任务 ' + (counts.task || 0) + ' · 对话 ' + (counts.chat || 0) + ' · 系统 ' + (counts.sys || 0)
       : (logCh === 'task' ? '任务' : logCh === 'chat' ? '对话' : '系统') + ' ' + entries.length + ' 行';
-    renderCreditHistory(credit);
     renderErrorSummary(errSum);
-  } catch (e) { /* 概览已提示 */ }
+  } catch (e) { $('logNote').textContent = '读取失败：' + e.message; }
 }
 
 /* 错误汇总（后端 /panel/api/error_summary 已聚合+排序）：只渲染，不在这里再算。 */
@@ -1472,25 +1455,6 @@ function renderErrorSummary(d) {
   $('errNote').textContent = d
     ? '扫描 ' + (d.scanned || 0) + ' 行 · ' + rows.length + ' 类 · 截至 ' + (d.updated_at || '—')
     : '—';
-}
-
-function renderRequestMetrics(m, entries) {
-  m = m || {};
-  const a = m.archive || {};
-  $('reqStats').innerHTML =
-    usStat(fmtTok(m.completed), '已完成') +
-    usStat(m.success_rate == null ? '—' : Number(m.success_rate).toFixed(1) + '%', '完成成功率') +
-    usStat(m.http_success_rate == null ? '—' : Number(m.http_success_rate).toFixed(1) + '%', 'HTTP 成功率') +
-    usStat(fmtMs(m.avg_duration_ms), '平均耗时') +
-    usStat(String(m.in_flight || 0), '进行中') +
-    usStat(fmtTok(a.files), '归档文件');
-  $('reqNote').textContent = a.enabled
-    ? 'JSONL 归档 ' + fmtBytes(a.bytes) + (a.dropped_writes ? ' · 丢弃 ' + a.dropped_writes + ' 条' : '') +
-      (a.last_error ? ' · 错误：' + a.last_error : '')
-    : '仅内存指标，JSONL 归档已关闭';
-
-  reqEntries = entries || [];
-  renderRequestTable();
 }
 
 /* ── 积分历史（每次真实查到余额与上次比对，变动即留痕）─────────────────
@@ -1568,7 +1532,7 @@ async function loadCreditHistory() {
 /* reqMatch 请求记录筛选：q 对 IP/UA/模型/账号/请求 ID 做空格分词的 AND 包含匹配，
    outcome 精确匹配。两者都在已拉取的条目上做（最多 1000 条），不发新请求。 */
 function reqMatch(e, f) {
-  f = f || reqFilter;
+  f = f || {q:'',outcome:''};
   if (f.outcome && String(e && e.outcome || '') !== f.outcome) return false;
   if (f.q) {
     const text = [e && e.client_ip, e && e.user_agent, e && e.model, e && e.account, e && e.request_id]
@@ -1601,59 +1565,6 @@ function reqCreditCell(e) {
   return Number.isFinite(v) ? trimFixed(v.toFixed(2)) : '<span class="muted">—</span>';
 }
 
-/* renderRequestTable 渲染请求记录表。来源列是这一版的重点：IP 用等宽字体方便扫，
-   UA 单行截断（完整值在 title 里，行本身用 requestLogText 作 tooltip）。 */
-function renderRequestTable() {
-  const list = reqEntries.filter(e => reqMatch(e));
-  const tb = $('reqBody');
-  if (!tb) return;
-  setHTML(tb, list.map(e => {
-    const when = e && e.time ? new Date(e.time).toLocaleTimeString('zh-CN', { hour12: false }) : '—';
-    const ip = e && e.client_ip ? e.client_ip : '';
-    const ua = e && e.user_agent ? e.user_agent : '';
-    const rid = e && e.request_id ? e.request_id : '';
-    return '<tr title="' + esc(requestLogText(e)) + '">' +
-      '<td class="num">' + esc(when) + '</td>' +
-      '<td>' + reqOutcomeTag(e) + '</td>' +
-      '<td>' + esc(e && e.model || '—') + '</td>' +
-      '<td>' + esc(e && e.account || '—') + '</td>' +
-      '<td>' + (ip ? '<span class="clip ip" title="' + esc(ip) + '">' + esc(ip) + '</span>' : '<span class="muted">—</span>') + '</td>' +
-      '<td>' + (ua ? '<span class="clip" title="' + esc(ua) + '">' + esc(ua) + '</span>' : '<span class="muted">—</span>') + '</td>' +
-      '<td class="num">' + fmtMs(e && e.duration_ms) + '</td>' +
-      '<td class="num">' + reqTokenCell(e) + '</td>' +
-      '<td class="num">' + reqCreditCell(e) + '</td>' +
-      '<td>' + (rid ? '<span class="clip rid" title="' + esc(rid) + '">' + esc(rid) + '</span>' : '<span class="muted">—</span>') + '</td>' +
-      '</tr>';
-  }).join('') || '<tr><td colspan="10" class="empty">' +
-      (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>');
-
-  const filtered = list.length !== reqEntries.length;
-  // 归档里的旧条目没有来源字段（该功能上线前写入）：这时提示开关/历史原因，
-  // 而不是让人以为筛选坏了。
-  const hasSource = reqEntries.some(e => e && (e.client_ip || e.user_agent));
-  $('reqCount').textContent = !reqEntries.length ? ''
-    : (filtered ? '命中 ' + list.length + ' / ' + reqEntries.length + ' 条' : reqEntries.length + ' 条') +
-      (hasSource ? '' : ' · 来源未记录');
-  $('reqCount').className = (filtered || !hasSource) ? 'note src-off' : 'note';
-}
-
-/* 请求记录筛选控件。搜索框防抖 150ms：最多 1000 行重渲染，不必每键一次。
-   这段顶层绑定放在 requestLogText 之前，是为了让"纯函数切片"式前端测试
-   （slice requestLogText → fmtBytes）只拿到无副作用的格式化函数。 */
-let reqQTimer = null;
-if ($('reqQ')) $('reqQ').oninput = () => {
-  clearTimeout(reqQTimer);
-  reqQTimer = setTimeout(() => { reqFilter.q = $('reqQ').value.trim(); renderRequestTable(); }, 150);
-};
-if ($('reqOutcome')) $('reqOutcome').onchange = () => {
-  reqFilter.outcome = $('reqOutcome').value;
-  renderRequestTable();
-};
-if ($('reqLimit')) $('reqLimit').onchange = loadLogs;
-if ($('btnReqReload')) $('btnReqReload').onclick = () => { resetLogWindow(); loadLogs(); };
-// 时间范围：默认「全部历史」——请求记录页的历史行为就是"取最近 N 条"，
-// 加一个默认收窄的区间会让打开页面时看到的条数凭空变少。
-if ($('reqRange')) trangeBind('reqRange', loadLogs, '0');
 if ($('creditLimit')) $('creditLimit').onchange = loadCreditHistory;
 if ($('btnCreditReload')) $('btnCreditReload').onclick = loadCreditHistory;
 
@@ -2078,6 +1989,10 @@ $('importFile').onchange = async () => {
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */
 $('btnAdd').onclick = openAdd;
 $('btnRefresh').onclick = async () => {
+  if (view === 'ops') { await loadOps(); return; }
+  if (view === 'events') { await loadEvents(); return; }
+  if (view === 'usage') { await Promise.all([loadUsage(),loadCreditHistory()]); return; }
+  if (view === 'logs') { await loadLogs(); return; }
   const b = $('btnRefresh');
   b.disabled = true; b.title = '刷新中…';
   try {
@@ -2123,6 +2038,7 @@ function refreshVisible() {
     loadOverview(true);
   }
   else if (view === 'ops' && $('opsAuto').checked) loadOps();
+  else if (view === 'events' && $('opsAuto').checked) loadEvents();
   else if (view === 'logs') loadLogs();
   else if (view === 'taskscenter') reattachQueueView();
 }
@@ -2900,26 +2816,6 @@ function renderUsage(d) {
   // 失败/延迟只在有值时上语义色——全绿全黄的仪表盘等于没有重点。
   const chTok = Number(t.cache_hit_tokens || 0), cmTok = Number(t.cache_miss_tokens || 0);
   const creditSamples = Number(t.credit_samples || 0);
-  $('usStats').innerHTML =
-    usKpi(fmtTok(reqs), '请求数', 'c-accent',
-      errs ? '其中失败 ' + errs + ' 次' : '全部成功') +
-    usKpi(fmtTok(total), '总 token', 'c-accent',
-      'prompt ' + usPct(pt, total) + ' · completion ' + usPct(ct, total),
-      '<div class="kbar"><i style="width:' + pctW(pt) + ';background:var(--accent)"></i>' +
-      '<i style="width:' + pctW(ct) + ';background:var(--ok)"></i></div>') +
-    // 积分：按所选窗口累计上游 usage.credit（缺失该字段的历史不参与；样本数为 0 时
-    // 明确写「无积分样本」而不是显示 0 —— 没观测到 ≠ 没消耗）。
-    usKpi(creditSamples ? fmtCredit(t.credits) : '—', '总积分', 'c-accent',
-      creditSamples ? creditSamples + ' 条样本' : '无样本') +
-    usKpi(cacheRateText(chTok, cmTok), '平均缓存命中率', 'c-accent',
-      (chTok + cmTok) ? '命中 ' + fmtTok(chTok) + ' · 未命中 ' + fmtTok(cmTok) : '无缓存观测样本') +
-    usKpi(fmtTok(pt), 'prompt', 'c-soft', '占比 ' + usPct(pt, total)) +
-    usKpi(fmtTok(ct), 'completion', 'c-ok', '占比 ' + usPct(ct, total)) +
-    usKpi(String(errs), '失败尝试', errs ? 'c-warn' : 'c-mute',
-      okRate == null ? '—' : (errs ? '成功率 ' + okRate.toFixed(1) + '%' : '成功率 100%')) +
-    usKpi(fmtMs(t.avg_latency_ms), '平均延迟', 'c-soft',
-      t.avg_tokens_per_second ? '吐字 ' + fmtRate(t.avg_tokens_per_second) : '无速率样本');
-
   // 卡片、明细表与时序图全部按所选窗口统计（切窗口数字随之变化）；
   // 「全部历史」含 90 天前折叠出的日桶。这里标注当前口径与数据起点。
   const winLabel = trangeLabel('usRange');
@@ -2938,13 +2834,13 @@ function renderUsage(d) {
 
   // 积分扣除的四张卡片与说明。
   $('usCreditStats').innerHTML =
-    usKpi(fmtCredit(t.credits), '扣除积分', 'c-accent', '按上游 usage.credit 累计') +
+    usKpi(t.credit_samples ? fmtCredit(t.credits) : '—', '扣除积分', 'c-accent', t.credit_samples ? '按上游 usage.credit 累计' : '无积分样本') +
     usKpi(fmtTok(t.credit_tokens), '匹配 Token', 'c-mute', '与积分同时观测到的 Token') +
     usKpi(fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens),
       '平均积分 / 1M Token', 'c-ok', '越低越划算') +
     usKpi(String(t.credit_samples || 0), '有效积分样本', 'c-mute', '缺字段的历史不参与折算') +
     usKpi(cacheRateText(t.cache_hit_tokens, t.cache_miss_tokens), '缓存命中率', 'c-mute',
-      '上游前缀缓存命中 / (命中+未命中)；低命中意味着费用数倍放大');
+      (Number(t.cache_hit_tokens || 0) + Number(t.cache_miss_tokens || 0)) ? '命中 ' + fmtTok(t.cache_hit_tokens) + ' · 未命中 ' + fmtTok(t.cache_miss_tokens) : '无缓存观测样本');
   $('usCreditNote').textContent =
     (usageData.credit_by_account || []).length + ' 个账号 · ' +
     (usageData.credit_by_model || []).length + ' 个模型倍率分组 · 仅统计与积分同时观测到的 Token';
@@ -3268,6 +3164,7 @@ async function warmUsageModelRates() {
 
 async function loadUsage() {
   const q = trangeQuery('usRange', true);
+  q.set('realm',$('usRealm').value || 'cn');
   try {
     await warmUsageModelRates();
     const d = await api('usage?' + q.toString());
@@ -3277,7 +3174,6 @@ async function loadUsage() {
     usageData = null;
     $('usChart').innerHTML = '<div class="us-empty">读取用量失败：' + esc(e.message) + '</div>';
     $('usChartNote').textContent = '—';
-    $('usStats').innerHTML = '';
     $('usCreditStats').innerHTML = '';
     $('usNote').textContent = '—';
     $('usCreditNote').textContent = '—';
@@ -3293,8 +3189,11 @@ async function loadUsage() {
 }
 
 if ($('btnUsage')) $('btnUsage').onclick = loadUsage;
+if ($('usRealm')) $('usRealm').onchange = loadUsage;
 // 时间范围控件绑定：任何改动（预设切换 / 自定义起止）都重新拉一次用量。
 if ($('usRange')) trangeBind('usRange', loadUsage);
+if ($('eventRange')) trangeBind('eventRange',()=>{eventGeneration++;eventPage=1;loadEvents();},'0');
+
 
 /* ── 积分构成 ─────────────────────────────────────────────────────── */
 // 套餐标签（后端 pool.ClassifyPlan 判定，unknown 不显示）：一眼看出该指望哪个号。
@@ -4946,21 +4845,32 @@ function fmtTokens(n) {
 
 /* ── 请求事件日志 (Keeper 风格大屏) ────────────────────────────────── */
 let rawEventsData = [];
+let eventPage = 1, eventBusy = false, eventGeneration = 0, filteredEventData = [];
 
 async function loadEvents() {
+  if (eventBusy) return;
+  eventBusy = true;
+  const generation = eventGeneration;
   const tb = $('eventTableBody');
   const limit = ($('eventFilterLimit') && $('eventFilterLimit').value) || 100;
   try {
-    const res = await api('request_logs?limit=' + limit);
+    const range = typeof trangeQuery === 'function' ? trangeQuery('eventRange',false).toString() : '';
+    const res = await api('request_logs?fallback=memory&limit=' + limit + (range?'&'+range:'') + '&model='+encodeURIComponent($('eventFilterModel').value || '')+'&account='+encodeURIComponent($('eventFilterAccount').value || ''));
+    if (generation !== eventGeneration) return;
+    if ($('eventSource')) $('eventSource').textContent = (res.source === 'memory' ? '归档已关闭 · 内存最近 100 条，重启清空' : '请求归档 · 本次最多读取 '+limit+' 条') + '；按完整完成结果判定成败，HTTP 200 后流错误仍计为失败。';
     rawEventsData = res.entries || [];
     populateEventFilterOptions(rawEventsData);
     renderEventTable();
   } catch (err) {
+    if (generation !== eventGeneration) return;
     // 不能把失败渲染成「共 0 条事件」——归档没开和查询出错是两回事，用户得知道是哪种。
     rawEventsData = [];
     if ($('eventBadge')) $('eventBadge').textContent = '读取失败';
-    if (tb) setHTML(tb, '<tr><td colspan="13" style="text-align:center;padding:20px;color:var(--err);">' +
+    if (tb) setHTML(tb, '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--err);">' +
       (err.status === 501 ? '请求归档未开启，事件日志不可用' : '读取失败: ' + esc(err.message || String(err))) + '</td></tr>');
+  } finally {
+    eventBusy = false;
+    if (generation !== eventGeneration) loadEvents();
   }
 }
 
@@ -4978,6 +4888,8 @@ function populateEventFilterOptions(list) {
     if (e.account) accts.add(e.account);
   });
 
+  if (currModel) models.add(currModel);
+  if (currAcct) accts.add(currAcct);
   let mOpt = '<option value="">全部 (' + models.size + ')</option>';
   models.forEach(m => mOpt += '<option value="' + esc(m) + '"' + (m === currModel ? ' selected' : '') + '>' + esc(m) + '</option>');
   setHTML(modelSel, mOpt);
@@ -4997,20 +4909,28 @@ function renderEventTable() {
   let filtered = rawEventsData.filter(e => {
     if (modelFilter && e.model !== modelFilter) return false;
     if (acctFilter && e.account !== acctFilter) return false;
-    if (statusFilter === 'success' && !(e.ok || (e.status >= 200 && e.status < 300))) return false;
-    if (statusFilter === '429' && e.status !== 429) return false;
-    if (statusFilter === 'error' && (e.ok || (e.status >= 200 && e.status < 300))) return false;
+    const search = ($('eventSearch') && $('eventSearch').value || '').trim().toLowerCase();
+    if (search && ![e.request_id,e.model,e.account,e.client_ip,e.user_agent].join(' ').toLowerCase().includes(search)) return false;
+    if (statusFilter === 'success' && !e.ok) return false;
+    if (statusFilter === '429' && e.status !== 429 && e.status !== 529) return false;
+    if (statusFilter === 'error' && e.ok) return false;
     return true;
   });
 
+  filteredEventData = filtered;
+  const pages = Math.max(1,Math.ceil(filtered.length/10));
+  eventPage = Math.max(1,Math.min(eventPage,pages));
+  if ($('eventPageInfo')) $('eventPageInfo').textContent = '第 '+eventPage+' / '+pages+' 页 · 共 '+filtered.length+' 条';
+  if ($('eventPrev')) $('eventPrev').disabled = eventPage<=1;
+  if ($('eventNext')) $('eventNext').disabled = eventPage>=pages;
   if ($('eventBadge')) $('eventBadge').textContent = '共 ' + filtered.length + ' 条事件';
 
   if (!filtered.length) {
-    setHTML(tb, '<tr><td colspan="13" style="text-align:center;padding:30px;color:var(--ink-3);">没有符合筛选条件的请求事件</td></tr>');
+    setHTML(tb, '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--ink-3);">没有符合筛选条件的请求事件</td></tr>');
     return;
   }
 
-  const html = filtered.map(e => {
+  const html = filtered.slice((eventPage-1)*10,eventPage*10).map(e => {
     const d = new Date(e.time);
     const tStr = isNaN(d) ? '-' : (String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0'));
     const dStr = isNaN(d) ? '' : (d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate());
@@ -5021,20 +4941,20 @@ function renderEventTable() {
     const effort = e.reasoning_effort || '-';
 
     let resTag = '<span class="tag-badge tag-success">成功</span>';
-    if (e.status === 429) {
-      resTag = '<span class="tag-badge tag-warn">429 限流</span>';
-    } else if (e.status && (e.status < 200 || e.status >= 300)) {
-      resTag = '<span class="tag-badge tag-error">' + e.status + ' 错误</span>';
+    if (e.status === 429 || e.status === 529) {
+      resTag = '<span class="tag-badge tag-warn">'+e.status+' 限流</span>';
+    } else if (!e.ok) {
+      resTag = '<span class="tag-badge tag-error">' + esc(e.outcome || e.status+' 错误') + '</span>';
     }
 
-    const reqProto = (e.mode === 'stream' || (e.path && e.path.includes('responses'))) ? 'SSE' : 'POST';
+    const reqProto = (e.mode === 'stream') ? 'SSE' : 'POST';
     const reqPath = (e.path || '/chat').replace(/^\/v1/, '');
 
     const durSec = ((e.duration_ms || 0) / 1000).toFixed(1) + 's';
-    const ttfbSec = e.ttfb_ms ? '首字延迟 ' + ((e.ttfb_ms) / 1000).toFixed(1) + 's' : '-';
+    const ttfbSec = e.ttfb_ms ? '首字节 ' + ((e.ttfb_ms) / 1000).toFixed(1) + 's' : '-';
 
     let tpsStr = '-';
-    if (e.completion_tokens > 0) {
+    if (e.ok && e.completion_tokens > 0 && e.ttfb_ms > 0 && e.duration_ms > e.ttfb_ms) {
       const genMs = Math.max(100, (e.duration_ms || 0) - (e.ttfb_ms || 0));
       tpsStr = ((e.completion_tokens / genMs) * 1000).toFixed(1) + ' t/s';
     }
@@ -5055,18 +4975,13 @@ function renderEventTable() {
 
     return '<tr>' +
       '<td class="time-cell"><div class="t-time">' + esc(tStr) + '</div><div class="t-date">' + esc(dStr) + '</div></td>' +
-      '<td><div class="acct-cell"><span class="acct-icon"></span><span title="' + esc(acctRaw) + '">' + esc(acctClean) + '</span></div></td>' +
-      '<td class="model-cell"><div class="m-name">' + esc(mName) + '</div></td>' +
-      '<td><span class="pill-effort">' + esc(effort) + '</span></td>' +
-      '<td>' + resTag + '</td>' +
-      '<td><span class="req-tag">' + esc(reqProto) + '</span><div class="req-path-sub">' + esc(reqPath) + '</div></td>' +
-      '<td><div class="metric-main">' + esc(durSec) + '</div><div class="metric-sub">' + esc(ttfbSec) + '</div></td>' +
-      '<td><div class="metric-main">' + esc(tpsStr) + '</div></td>' +
-      '<td class="token-cell"><div class="tok-total">' + esc(totTok) + '</div><div class="token-breakdown"><div class="token-breakdown-row"><span class="tok-in">↑ ' + esc(pTok) + '</span></div><div class="token-breakdown-row"><span class="tok-out">↓ ' + esc(cTok) + '</span> ' + thinkTok + '</div></div></td>' +
+      '<td><div class="acct-cell"><span title="' + esc(acctRaw) + '">' + esc(acctClean) + '</span></div><code class="event-rid" title="'+esc(e.request_id || '')+'">'+esc(e.request_id || '—')+'</code></td>' +
+      '<td class="model-cell"><div class="m-name">' + esc(mName) + '</div><span class="pill-effort">' + esc(effort) + '</span></td>' +
+      '<td>' + resTag + '<div class="req-path-sub">'+esc(reqProto+' '+reqPath)+'</div></td>' +
+      '<td><div class="metric-main">' + esc(durSec) + '</div><div class="metric-sub">' + esc(ttfbSec) + '</div><div class="metric-sub">'+esc(tpsStr)+'</div></td>' +
+      '<td class="token-cell"><div class="metric-sub">积分 '+(e.credit_known ? esc(Number(e.credit).toFixed(2)) : '—')+'</div><div class="tok-total">' + esc(totTok) + '</div><div class="token-breakdown"><span class="tok-in">↑ ' + esc(pTok) + '</span> <span class="tok-out">↓ ' + esc(cTok) + '</span> ' + thinkTok + '</div></td>' +
       '<td class="cache-cell"><div class="cache-rate">' + esc(cRate) + '</div><div class="cache-breakdown"><div><span class="cache-hit">命中 ' + esc(formatEventNum(cHit)) + '</span></div><div><span class="cache-miss">未命中 ' + esc(formatEventNum(cMiss)) + '</span></div></div></td>' +
-      '<td><span class="executor-name">' + esc(exec) + '</span></td>' +
-      '<td><code class="ip-mono">' + esc(ip) + '</code></td>' +
-      '<td><div class="ua-cell" title="' + esc(ua) + '">' + esc(ua) + '</div></td>' +
+      '<td><button class="xs" data-event-index="'+rawEventsData.indexOf(e)+'" title="'+esc(exec+' · '+ua)+'">详情</button><div class="metric-sub">'+esc(ip)+'</div></td>' +
     '</tr>';
   }).join('');
 
@@ -5092,19 +5007,20 @@ function deriveEventExecutor(ua) {
   return 'WorkBuddyExecutor';
 }
 
-if ($('eventFilterModel')) $('eventFilterModel').onchange = renderEventTable;
-if ($('eventFilterAccount')) $('eventFilterAccount').onchange = renderEventTable;
-if ($('eventFilterStatus')) $('eventFilterStatus').onchange = renderEventTable;
-if ($('eventFilterLimit')) $('eventFilterLimit').onchange = loadEvents;
+if ($('eventFilterModel')) $('eventFilterModel').onchange = eventFilterChanged;
+if ($('eventFilterAccount')) $('eventFilterAccount').onchange = eventFilterChanged;
+if ($('eventFilterStatus')) $('eventFilterStatus').onchange = eventFilterChanged;
+if ($('eventFilterLimit')) $('eventFilterLimit').onchange = () => {eventPage=1;eventGeneration++;loadEvents();};
 if ($('btnEventClearFilters')) $('btnEventClearFilters').onclick = () => {
   if ($('eventFilterModel')) $('eventFilterModel').value = '';
   if ($('eventFilterAccount')) $('eventFilterAccount').value = '';
   if ($('eventFilterStatus')) $('eventFilterStatus').value = '';
-  renderEventTable();
+  if ($('eventSearch')) $('eventSearch').value='';
+  eventFilterChanged();
 };
 if ($('btnEventRefresh')) $('btnEventRefresh').onclick = loadEvents;
 if ($('btnEventExport')) $('btnEventExport').onclick = () => {
-  const blob = new Blob([JSON.stringify(rawEventsData, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify(filteredEventData, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -5113,8 +5029,14 @@ if ($('btnEventExport')) $('btnEventExport').onclick = () => {
   URL.revokeObjectURL(url);
 };
 
+function eventFilterChanged() { eventPage=1; $('eventDetailPanel').hidden=true; renderEventTable(); }
+$('eventSearch').oninput=eventFilterChanged;
+$('eventPrev').onclick=()=>{eventPage--;renderEventTable();};
+$('eventNext').onclick=()=>{eventPage++;renderEventTable();};
+$('eventTableBody').onclick=e=>{const b=e.target.closest('[data-event-index]');if(!b)return;const row=rawEventsData[Number(b.dataset.eventIndex)];if(!row)return;$('eventDetail').textContent=JSON.stringify(row,null,2);$('eventDetailPanel').hidden=false;$('eventDetailPanel').open=true;};
+
 /* ── 运维监控 ────────────────────────────────────────────────────── */
-let opsData = null, opsBusy = false, opsGeneration = 0, opsDetailPage = 1, opsTokenPage = 1;
+let opsData = null, opsBusy = false, opsGeneration = 0;
 let opsAlertEvents = [], opsAlertActive = new Set();
 const OPS_DEFAULTS = { error: 5, latency: 30 };
 let opsThresholds = { ...OPS_DEFAULTS };
@@ -5228,39 +5150,13 @@ function renderOps() {
   opsBars('opsLatency',['≤1s','1–3s','3–5s','5–10s','10–30s','30–60s','>60s'].map((x,i)=>[x,d.histogram[i]]));
   const names={limited:'限流 429/529',server:'HTTP 5xx',client:'HTTP 4xx / 其他',stream_error:'流错误',interrupted:'中断',http_error:'HTTP 错误'};
   opsBars('opsErrors',Object.entries(d.errors).map(([k,n])=>[names[k] || k,n]));
-  opsEvaluateAlerts(); renderOpsTokens(); renderOpsDetails();
+  opsEvaluateAlerts(); renderPoolHealth();
   const jobs=(opsData.jobs || []).slice().sort((a,b)=>new Date(b.updated_at || b.started_at || 0)-new Date(a.updated_at || a.started_at || 0));
   setHTML($('opsJobs'),jobs.slice(0,10).map(j=>'<p style="padding:7px 0">'+esc(j.uid)+' · '+esc(j.status)+'<br><span class="hint">'+esc(j.message || j.error || '')+'</span></p>').join('') || '<div class="empty">暂无后台任务</div>');
 }
-function opsPage(prefix, page, count) {
-  const total=Math.max(1,Math.ceil(count/10)), value=Math.max(1,Math.min(page,total));
-  $(prefix+'Page').textContent=value+' / '+total+' · 共 '+count+' 条';
-  $(prefix+'Prev').disabled=value<=1; $(prefix+'Next').disabled=value>=total;
-  return value;
-}
-function renderOpsTokens() {
-  if (!opsData) return;
-  const rows=opsData.data.models;
-  opsTokenPage=opsPage('opsTokens',opsTokenPage,rows.length);
-  setHTML($('opsTokens'),rows.slice((opsTokenPage-1)*10,opsTokenPage*10).map(x=>'<tr>'+[
-    x.model || '未指定',opsNum(x.requests),opsNum(x.succeeded/x.requests*100)+'%',opsNum(x.prompt_tokens),opsNum(x.output_tokens),
-    x.tps_samples?opsNum(x.output_tps):'—',x.ttfb_samples?opsMs(x.avg_ttfb_ms):'—',opsMs(x.avg_duration_ms)
-  ].map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>').join('') || '<tr><td colspan="8"><div class="empty">当前窗口暂无请求</div></td></tr>');
-}
-function renderOpsDetails() {
-  if (!opsData) return;
-  const kind=$('opsLogKind').value, query=$('opsSearch').value.toLowerCase();
-  const system=kind==='system';
-  let rows=system?(opsData.logs || []).slice().reverse():(kind==='errors'?opsData.data.recent_errors:opsData.data.recent);
-  rows=rows.filter(e=>JSON.stringify(e).toLowerCase().includes(query));
-  opsDetailPage=opsPage('opsDetails',opsDetailPage,rows.length);
-  setHTML($('opsDetailsHead'),'<tr>'+(system?['时间','频道','日志']:['时间','请求 ID','模型 / 账号','结果','时长 / 首字节','操作']).map(x=>'<th>'+x+'</th>').join('')+'</tr>');
-  setHTML($('opsDetails'),rows.slice((opsDetailPage-1)*10,opsDetailPage*10).map(e=>system?'<tr><td>'+esc(opsTime(e.ts))+'</td><td>'+esc(e.ch)+'</td><td style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(e.text)+'</td></tr>':'<tr><td>'+esc(opsTime(e.time))+'</td><td>'+esc(e.request_id)+'</td><td>'+esc(e.model)+'<br><small>'+esc(e.account)+'</small></td><td><span class="tag '+(e.ok?'ok':'bad')+'">'+esc(e.status+' · '+e.outcome)+'</span></td><td>'+opsMs(e.duration_ms)+' / '+(e.ttfb_ms?opsMs(e.ttfb_ms):'—')+'</td><td><button class="xs" data-ops-request="'+(kind==='errors'?opsData.data.recent_errors:opsData.data.recent).indexOf(e)+'">详情</button></td></tr>').join('') || '<tr><td colspan="6"><div class="empty">暂无匹配记录</div></td></tr>');
-}
 function opsFilterChanged() {
-  opsGeneration++; opsDetailPage=opsTokenPage=1;
+  opsGeneration++;
   opsAlertActive = new Set();
-  $('opsDetailPanel').hidden=true;
   loadOps();
 }
 $('opsWindow').onchange=()=>{$('opsCustom').hidden=$('opsWindow').value!=='custom'; if ($('opsWindow').value!=='custom') opsFilterChanged();};
@@ -5279,16 +5175,33 @@ $('opsSaveSettings').onclick=()=>{
   opsThresholds={error,latency};localStorage.setItem('wb2api.ops.thresholds',JSON.stringify(opsThresholds));
   if (opsData) opsEvaluateAlerts();toast('告警设置已保存','ok');
 };
-for (const prefix of ['opsTokens','opsDetails']) {
-  const render = prefix === 'opsTokens' ? renderOpsTokens : renderOpsDetails;
-  $(prefix+'Prev').onclick=()=>{if(prefix==='opsTokens') opsTokenPage--;else opsDetailPage--;render();};
-  $(prefix+'Next').onclick=()=>{if(prefix==='opsTokens') opsTokenPage++;else opsDetailPage++;render();};
-}
-$('opsLogKind').onchange=()=>{opsDetailPage=1;renderOpsDetails();};
-$('opsSearch').oninput=()=>{opsDetailPage=1;renderOpsDetails();};
-$('opsShowErrors').onclick=()=>{$('opsLogKind').value='errors';opsDetailPage=1;renderOpsDetails();$('opsDetails').scrollIntoView({behavior:'smooth',block:'center'});};
-$('opsDetails').onclick=e=>{
-  const b=e.target.closest('button[data-ops-request]');if (!b || !opsData) return;
-  const row=($('opsLogKind').value==='errors'?opsData.data.recent_errors:opsData.data.recent)[Number(b.dataset.opsRequest)];if (!row) return;
-  $('opsDetail').textContent=JSON.stringify(row,null,2);$('opsDetailPanel').hidden=false;$('opsDetailPanel').open=true;
+$('opsShowErrors').onclick=()=>{
+  $('eventFilterStatus').value='error';eventPage=1;eventGeneration++;
+  if(opsData){
+    const st=trangeState('eventRange');st.preset='custom';st.from=new Date(opsData.data.from);st.to=new Date(opsData.data.to);trangeRender('eventRange');
+    for(const [target,source] of [['eventFilterModel','opsModel'],['eventFilterAccount','opsAccount']]){
+      const el=$(target),value=$(source).value;
+      if(value && !Array.from(el.options).some(o=>o.value===value)){const option=document.createElement('option');option.value=value;option.textContent=value;el.appendChild(option);}
+      el.value=value;
+    }
+  }
+  go('events');
 };
+$('centerNav').onclick=e=>{const b=e.target.closest('button[data-center]');if(b)go(b.dataset.center);};
+$('centerAccounts').onclick=()=>go('accounts');
+$('centerModels').onclick=()=>go('models');
+function renderPoolHealth() {
+  if (!opsData) return;
+  const accounts=opsData.pool.accounts || [];
+  const locks=opsData.model_locks || [];
+  const summaries=['cn','global'].map(realm=>{
+    const group=accounts.filter(a=>(a.realm || 'cn')===realm);
+    const finite=group.filter(a=>a.credits_total>0);
+    const remaining=finite.reduce((n,a)=>n+Number(a.credits || 0),0);
+    const expiring=finite.reduce((n,a)=>n+Number(a.credits_expiring || 0),0);
+    const unlimited=group.filter(a=>a.credits_total===-1).length;
+    return '<span><b>'+(realm==='cn'?'国内':'国际')+' '+opsNum(remaining)+' 积分</b> · 快到期 '+opsNum(expiring)+' · 不限量 '+unlimited+' · 未知额度 '+(group.length-finite.length-unlimited)+'</span>';
+  });
+  setHTML($('opsPoolSummary'),summaries.join('')+'<span>受限模型 '+locks.length+' 个</span><span class="hint">国内与国际积分分别统计；余额来自最近同步。</span>');
+  setHTML($('opsModelLocks'),locks.length?locks.map(x=>'<p style="padding:6px 0"><b>'+esc(x.model)+'</b> · '+esc(x.realm || 'cn')+' · '+esc(({locked:'全池锁定',starved:'当前无可选账号',partial:'部分限流'})[x.state] || x.state)+' · 可选 '+opsNum(x.servable)+' / '+opsNum(x.total)+'</p>').join(''):'<p class="hint">当前没有模型级限流；账号与模型的操作入口见上方。</p>');
+}

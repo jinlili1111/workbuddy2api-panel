@@ -727,7 +727,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .events-filter-group label { font-weight: 500; font-size: 12px; color: var(--ink-3); margin: 0; white-space: nowrap; }
 .events-filter-group select { width: auto !important; min-width: 140px !important; height: 32px; padding: 2px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 12.5px; outline: none; }
 .event-tbl-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.event-table { width: 100%; min-width: 1520px; border-collapse: collapse; font-size: 12px; text-align: left; }
+.event-table { width: 100%; min-width: 1000px; border-collapse: collapse; font-size: 12px; text-align: left; }
 .event-table th { padding: 11px 14px; font-weight: 600; color: var(--ink-3); border-bottom: 1px solid var(--line); font-size: 11.5px; white-space: nowrap; background: var(--surface-2); }
 .event-table td { padding: 12px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; white-space: nowrap; }
 .event-table tbody tr:hover { background: rgba(0, 0, 0, 0.02); }
@@ -760,6 +760,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .ua-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ink-3); cursor: help; }
 
 
+.center-nav {margin:24px 24px 0}
+.kpis.k5 {grid-template-columns:repeat(5,minmax(0,1fr))}
+.event-rid {display:block;max-width:135px;overflow:hidden;text-overflow:ellipsis;font-size:10px;color:var(--ink-3)}
+@media(max-width:1050px){.kpis.k5 {grid-template-columns:repeat(2,minmax(0,1fr))}}
 .ops-toolbar {display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:14px 18px}
 .ops-toolbar select {width:auto;max-width:240px}
 #view-ops header select {width:auto;max-width:180px}
@@ -796,10 +800,10 @@ body.ops-fullscreen {overflow:hidden}
       <li><a href="#accounts" data-view="accounts" class="on">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.6"/><path d="M2.8 13.5c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4"/></svg>
         账号池</a></li>
-      <li><a href="#usage" data-view="usage">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 13.5h12"/><path d="M4.5 13.5V8.2M8 13.5V3.5M11.5 13.5v-3"/></svg>
-        用量</a></li>
-      <li><a href="#packages" data-view="packages">
+      <li><a href="#ops" data-view="ops">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
+        运行中心</a></li>
+<li><a href="#packages" data-view="packages">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.2 5.4 8 2.5l5.8 2.9v5.2L8 13.5l-5.8-2.9z"/><path d="M2.2 5.4 8 8.3l5.8-2.9M8 8.3v5.2"/></svg>
         积分构成</a></li>
       <li><a href="#balhist" data-view="balhist">
@@ -813,15 +817,7 @@ body.ops-fullscreen {overflow:hidden}
       <li><a href="#config" data-view="config">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         配置</a></li>
-      <li><a href="#ops" data-view="ops">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
-        运维监控</a></li>
-      <li><a href="#events" data-view="events">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2.5"/><path d="M5 5.5h6M5 8h6M5 10.5h3.5"/></svg>
-        请求事件日志</a></li>
-      <li><a href="#logs" data-view="logs">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h11M2.5 8h11M2.5 12.5h7"/></svg>
-        运行日志</a></li>
+
     </ul>
     <div class="sig">
       <div class="row"><span class="pulse" id="navPulse"></span><span id="navState">连接中</span></div>
@@ -855,9 +851,17 @@ body.ops-fullscreen {overflow:hidden}
 
     <!-- 账号池 -->
 
+    <div class="box center-nav" id="centerNav" hidden>
+      <div class="ops-toolbar" role="tablist" aria-label="运行中心">
+        <button class="xs" data-center="ops" role="tab">实时健康</button>
+        <button class="xs" data-center="usage" role="tab">积分账本</button>
+        <button class="xs" data-center="events" role="tab">请求追踪</button>
+        <button class="xs" data-center="logs" role="tab">系统事件</button>
+      </div><p class="hint" id="centerScope" style="padding:0 18px 14px"></p>
+    </div>
     <section class="view" id="view-ops" hidden>
       <div class="box">
-        <header><h3>运维监控 <span class="hint" id="opsHealth">读取中</span></h3><span class="grow"></span><span class="hint" id="opsUpdated"></span><button class="xs" id="opsFullscreen">全屏</button></header>
+        <header><h3>实时健康 <span class="hint" id="opsHealth">读取中</span></h3><span class="grow"></span><span class="hint" id="opsUpdated"></span><button class="xs" id="opsFullscreen">全屏</button></header>
         <div class="ops-toolbar">
           <label>时间 <select id="opsWindow"><option value="5m">近 5 分钟</option><option value="30m">近 30 分钟</option><option value="1h" selected>近 1 小时</option><option value="6h">近 6 小时</option><option value="24h">近 24 小时</option><option value="custom">自定义</option></select></label>
           <span id="opsCustom" hidden><input id="opsFrom" type="datetime-local" aria-label="开始时间"> — <input id="opsTo" type="datetime-local" aria-label="结束时间"></span>
@@ -876,6 +880,7 @@ body.ops-fullscreen {overflow:hidden}
         </div>
       </div>
       <div class="ops-kpis" id="opsKpis"></div>
+      <div class="box"><header><h3>账号调度与积分水位</h3><span class="grow"></span><button class="xs" id="centerAccounts">管理账号</button><button class="xs" id="centerModels">模型与档位</button></header><div class="ops-systems" id="opsPoolSummary"></div><div class="ops-scroll" id="opsModelLocks"></div></div>
       <div class="box"><header><h3>系统健康</h3></header><div class="ops-systems" id="opsSystem"></div><div class="ops-scroll" id="opsDiagnosis"></div></div>
       <div class="ops-grid">
         <div class="box"><header><h3>当前并发</h3><span class="hint">全局实时</span></header><div class="ops-scroll" id="opsConcurrency"></div></div>
@@ -883,18 +888,14 @@ body.ops-fullscreen {overflow:hidden}
         <div class="box"><header><h3>吞吐趋势</h3><span class="hint">QPS / Token 每秒</span></header><div class="ops-chart" id="opsThroughput"></div></div>
         <div class="box"><header><h3>错误趋势</h3></header><div class="ops-chart" id="opsErrorTrend"></div></div>
         <div class="box"><header><h3>请求时长分布</h3></header><div class="ops-chart" id="opsLatency"></div></div>
-        <div class="box"><header><h3>错误分布</h3><button class="xs" id="opsShowErrors">查看明细</button></header><div class="ops-chart" id="opsErrors"></div></div>
+        <div class="box"><header><h3>错误分布</h3><button class="xs" id="opsShowErrors">追踪失败请求</button></header><div class="ops-chart" id="opsErrors"></div></div>
       </div>
-      <div class="box"><header><h3>Token 请求统计</h3><span class="grow"></span><button class="xs" id="opsTokensPrev">上一页</button><span class="hint" id="opsTokensPage"></span><button class="xs" id="opsTokensNext">下一页</button></header><div class="tbl-wrap"><table class="acc"><thead><tr><th>模型</th><th>请求</th><th>成功率</th><th>输入 Token</th><th>输出 Token</th><th>平均输出 TPS</th><th>平均首字节</th><th>平均时长</th></tr></thead><tbody id="opsTokens"></tbody></table></div></div>
+
       <div class="ops-grid">
         <div class="box"><header><h3>告警事件</h3><span class="hint">当前浏览器本次打开期间 · 最多 50 条</span></header><div class="ops-scroll" id="opsAlerts"></div></div>
         <div class="box"><header><h3>后台任务</h3><span class="hint">最近 10 项</span></header><div class="ops-scroll" id="opsJobs"></div></div>
       </div>
-      <div class="box">
-        <header><h3>排障明细 <span class="hint">请求、错误、系统各保留最新 100 条；系统日志为全局数据</span></h3><span class="grow"></span><select id="opsLogKind"><option value="requests">请求明细</option><option value="errors">错误请求</option><option value="system">系统日志</option></select><input id="opsSearch" placeholder="搜索 ID / 模型 / 日志" aria-label="搜索明细"><button class="xs" id="opsDetailsPrev">上一页</button><span class="hint" id="opsDetailsPage"></span><button class="xs" id="opsDetailsNext">下一页</button></header>
-        <div class="tbl-wrap"><table class="acc"><thead id="opsDetailsHead"></thead><tbody id="opsDetails"></tbody></table></div>
-        <details id="opsDetailPanel" hidden><summary style="padding:12px 18px">选中请求详情</summary><pre class="ops-detail" id="opsDetail"></pre></details>
-      </div>
+
     </section>
 
     <section class="view" id="view-accounts">
@@ -1156,17 +1157,17 @@ body.ops-fullscreen {overflow:hidden}
     <section class="view" id="view-usage" hidden>
       <div class="box">
         <header>
-          <h3>用量总览</h3>
+          <h3>积分账本 <span class="hint">持久化历史 · 按实际观测的积分结算</span></h3>
           <span class="grow"></span>
           <span class="note" id="usNote">—</span>
-          <span class="trange" id="usRange"></span>
+          <select id="usRealm" aria-label="积分账域"><option value="cn">国内积分账</option><option value="global">国际积分账</option></select><span class="trange" id="usRange"></span>
           <button class="xs" id="btnUsage">刷新</button>
         </header>
-        <div class="kpis k8" id="usStats"></div>
+        <div class="kpis k5" id="usCreditStats"></div>
         <div class="pad">
           <div class="uschart">
             <div class="uschart-hd">
-              <span class="lb">Token 时序</span>
+              <span class="lb">Token 时序 · 缓存效率</span>
               <span class="note" id="usChartNote">—</span>
               <span class="grow"></span>
               <span class="legend"><i class="sw sw-p"></i>prompt<i class="sw sw-c"></i>completion<span class="sep"></span><i class="sw sw-hit"></i>缓存命中率<i class="sw sw-t"></i>均值</span>
@@ -1220,7 +1221,7 @@ body.ops-fullscreen {overflow:hidden}
 
       <div class="box">
         <header>
-          <h3>积分扣除历史</h3>
+          <h3>积分效率对比</h3>
           <span class="vtabs" id="usCreditTabs">
             <button data-dim="account" class="on">按账号</button>
             <button data-dim="model">按模型</button>
@@ -1228,11 +1229,35 @@ body.ops-fullscreen {overflow:hidden}
           <span class="grow"></span>
           <span class="note" id="usCreditNote">—</span>
         </header>
-        <div class="kpis k4" id="usCreditStats"></div>
+
         <div class="tbl-wrap">
           <table class="acc zebra">
             <thead id="usCreditHead"></thead>
             <tbody id="usCreditBody"></tbody>
+          </table>
+        </div>
+      </div>
+    <div class="box">
+        <header>
+          <h3>余额变动流水 <span class="hint">全账号 · 独立于上方账域筛选，每次真实查到余额的变动留痕</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="creditNote">—</span>
+        </header>
+        <div class="fbar">
+          <select id="creditLimit" aria-label="读取条数">
+            <option value="100" selected>最近 100 条</option>
+            <option value="300">最近 300 条</option>
+            <option value="1000">最近 1000 条</option>
+          </select>
+          <span class="grow"></span>
+          <button class="xs" id="btnCreditReload">重新读取</button>
+        </div>
+        <div class="tbl-wrap">
+          <table class="acc">
+            <thead><tr>
+              <th>时间</th><th>账号</th><th class="num">变动</th><th class="num">变动后余额</th><th>说明</th>
+            </tr></thead>
+            <tbody id="creditBody"></tbody>
           </table>
         </div>
       </div>
@@ -1541,13 +1566,13 @@ body.ops-fullscreen {overflow:hidden}
       </form>
     </section>
 
-    <!-- 请求事件日志 (Keeper 风格大屏) -->
+    <!-- 运行中心：请求追踪 -->
     <section class="view" id="view-events" hidden>
       <div class="box">
         <header class="events-header">
           <div class="events-title-wrap">
-            <h3>请求事件日志 <span class="events-badge" id="eventBadge">共 0 条事件</span></h3>
-            <div class="subtext">筛选、查看并分析实时调用事件与性能指标（完全对齐 Keeper 风格）。</div>
+            <h3>请求追踪 <span class="events-badge" id="eventBadge">共 0 条事件</span></h3>
+            <div class="subtext" id="eventSource">一条请求一条记录：查账号、积分消耗、思考档位、缓存与调用来源。</div>
           </div>
           <span class="grow"></span>
           <div class="events-actions">
@@ -1555,13 +1580,14 @@ body.ops-fullscreen {overflow:hidden}
           </div>
         </header>
 
+        <div class="ops-toolbar"><span class="trange" id="eventRange"></span><input id="eventSearch" type="search" placeholder="请求 ID / 模型 / 账号 / IP / UA" aria-label="搜索请求"><button class="xs" id="eventPrev">上一页</button><span class="hint" id="eventPageInfo"></span><button class="xs" id="eventNext">下一页</button></div>
         <div class="events-filter-bar">
           <div class="events-filter-group">
             <label for="eventFilterModel">模型</label>
             <select id="eventFilterModel"><option value="">全部</option></select>
           </div>
           <div class="events-filter-group">
-            <label for="eventFilterAccount">来源</label>
+            <label for="eventFilterAccount">账号</label>
             <select id="eventFilterAccount"><option value="">全部</option></select>
           </div>
           <div class="events-filter-group">
@@ -1569,7 +1595,7 @@ body.ops-fullscreen {overflow:hidden}
             <select id="eventFilterStatus">
               <option value="">全部</option>
               <option value="success">成功</option>
-              <option value="429">429 限流</option>
+              <option value="429">429 / 529 限流</option>
               <option value="error">错误</option>
             </select>
           </div>
@@ -1589,73 +1615,19 @@ body.ops-fullscreen {overflow:hidden}
 
         <div class="event-tbl-wrap">
           <table class="event-table">
-            <thead>
-              <tr>
-                <th style="min-width: 90px">时间</th>
-                <th style="min-width: 180px">来源</th>
-                <th style="min-width: 180px">模型</th>
-                <th style="min-width: 75px">推理强度</th>
-                <th style="min-width: 75px">结果</th>
-                <th style="min-width: 90px">请求</th>
-                <th style="min-width: 100px">延时</th>
-                <th style="min-width: 85px">生成速度</th>
-                <th style="min-width: 125px">Token</th>
-                <th style="min-width: 115px">缓存</th>
-                <th style="min-width: 140px">执行器</th>
-                <th style="min-width: 110px">客户端 IP</th>
-                <th style="min-width: 180px">用户代理</th>
-              </tr>
-            </thead>
+            <thead><tr><th>时间</th><th>账号 / 请求 ID</th><th>模型 / 思考</th><th>结果 / 协议</th><th>耗时 / 速度</th><th>Token / 积分</th><th>缓存</th><th>详情 / 来源</th></tr></thead>
             <tbody id="eventTableBody">
-              <tr><td colspan="13" style="text-align: center; padding: 30px; color: var(--ink-3);">加载中...</td></tr>
+              <tr><td colspan="8" style="text-align: center; padding: 30px; color: var(--ink-3);">加载中...</td></tr>
             </tbody>
           </table>
         </div>
       </div>
+    <details id="eventDetailPanel" hidden><summary>请求详情</summary><pre class="ops-detail" id="eventDetail"></pre></details>
     </section>
 
     <!-- 日志 -->
     <section class="view" id="view-logs" hidden>
-      <div class="box">
-        <header>
-          <h3>请求记录 <span class="hint">调用来源：IP 取 X-Forwarded-For 首段，无代理头时回落 TCP 对端</span></h3>
-          <span class="grow"></span>
-          <span class="note" id="reqNote">—</span>
-        </header>
-        <!-- reqStats：指标行容器（renderRequestMetrics 写入）。合并 #87 时新排版丢了它，
-             而 loadLogs 里的 renderRequestMetrics 仍写这个 id —— 元素缺失时抛错被
-             loadLogs 的 try/catch 吞掉，整块运行日志渲染不出来（只有它这一个 id 悬空）。 -->
-        <div class="stats" id="reqStats"></div>
-        <div class="fbar" id="reqFilter">
-          <input id="reqQ" type="search" placeholder="搜索 IP / UA / 模型 / 账号 / 请求 ID" aria-label="搜索请求记录">
-          <select id="reqOutcome" aria-label="按结果筛选">
-            <option value="">全部结果</option>
-            <option value="success">成功</option>
-            <option value="http_error">HTTP 错误</option>
-            <option value="stream_error">流错误</option>
-            <option value="interrupted">中断</option>
-          </select>
-          <span class="trange" id="reqRange"></span>
-          <select id="reqLimit" aria-label="读取条数">
-            <option value="100" selected>最近 100 条</option>
-            <option value="300">最近 300 条</option>
-            <option value="1000">最近 1000 条</option>
-          </select>
-          <span class="grow"></span>
-          <span class="note" id="reqCount">—</span>
-          <button class="xs" id="btnReqReload">重新读取</button>
-        </div>
-        <div class="tbl-wrap req-wrap">
-          <table class="acc req">
-            <thead><tr>
-              <th>时间</th><th>结果</th><th>模型</th><th>账号</th>
-              <th>来源 IP</th><th>User-Agent</th>
-              <th class="num">耗时</th><th class="num">Token</th><th class="num">积分</th><th>请求 ID</th>
-            </tr></thead>
-            <tbody id="reqBody"></tbody>
-          </table>
-        </div>
-      </div>
+
 
       <!-- 错误汇总：日志环里的 WARN/ERR 按「账号 × 类型」聚合（见 errors.go）。
            原始日志几十行同质 WARN 时，「谁报错 44 次、谁只 1 次」这个差异只能靠聚合才看得见。 -->
@@ -1692,30 +1664,7 @@ body.ops-fullscreen {overflow:hidden}
         <pre id="logBox"></pre>
       </div>
 
-      <div class="box">
-        <header>
-          <h3>积分历史 <span class="hint">每次真实查到余额与上次比对，变动即留痕</span></h3>
-          <span class="grow"></span>
-          <span class="note" id="creditNote">—</span>
-        </header>
-        <div class="fbar">
-          <select id="creditLimit" aria-label="读取条数">
-            <option value="100" selected>最近 100 条</option>
-            <option value="300">最近 300 条</option>
-            <option value="1000">最近 1000 条</option>
-          </select>
-          <span class="grow"></span>
-          <button class="xs" id="btnCreditReload">重新读取</button>
-        </div>
-        <div class="tbl-wrap">
-          <table class="acc">
-            <thead><tr>
-              <th>时间</th><th>账号</th><th class="num">变动</th><th class="num">变动后余额</th><th>说明</th>
-            </tr></thead>
-            <tbody id="creditBody"></tbody>
-          </table>
-        </div>
-      </div>
+
     </section>
   </div>
 </div>

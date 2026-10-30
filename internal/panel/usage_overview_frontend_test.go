@@ -48,13 +48,13 @@ run('sampleOk', () => ctx.renderUsage({ totals: {
   avg_latency_ms: 1200, avg_tokens_per_second: 42.5,
   credits: 1.23, credit_samples: 3,
   cache_hit_tokens: 7200, cache_miss_tokens: 800 }, buckets: 3 }));
-out.sampleStats = els.usStats.innerHTML;
+out.sampleStats = els.usCreditStats.innerHTML;
 
 run('emptyOk', () => ctx.renderUsage({ totals: {} }));
-out.emptyStats = els.usStats.innerHTML;
+out.emptyStats = els.usCreditStats.innerHTML;
 
 run('dirtyOk', () => ctx.renderUsage({ totals: { requests: '3', cache_hit_tokens: '7200', cache_miss_tokens: 'x' } }));
-out.dirtyStats = els.usStats.innerHTML;
+out.dirtyStats = els.usCreditStats.innerHTML;
 console.log(JSON.stringify(out));
 `
 
@@ -101,37 +101,16 @@ func TestUsageOverviewCacheHitKPI(t *testing.T) {
 	}
 
 	stats := out.SampleStats
-	if !strings.Contains(stats, "平均缓存命中率") {
-		t.Fatalf("总览缺少「平均缓存命中率」卡:\n%s", stats)
+	for _, label := range []string{"扣除积分", "1.23", "90%", "命中 7.2k · 未命中 800", "有效积分样本"} {
+		if !strings.Contains(stats, label) {
+			t.Fatalf("积分账本缺少 %s: %s", label, stats)
+		}
 	}
-	if !strings.Contains(stats, "90%") {
-		t.Fatalf("命中率 7200/8000 应显示 90%%:\n%s", stats)
+	if strings.Contains(stats, ">请求数<") || strings.Contains(stats, ">平均延迟<") {
+		t.Fatal("积分账本不应重复实时健康指标")
 	}
-	if !strings.Contains(stats, "命中 7.2k · 未命中 800") {
-		t.Fatalf("副标题应回显命中/未命中 token:\n%s", stats)
-	}
-	// 积分卡：按窗口累计 upstream usage.credit，样本数一并回显，缺样本时不伪造 0。
-	if !strings.Contains(stats, ">总积分<") || !strings.Contains(stats, "1.23") {
-		t.Fatalf("总览缺少「总积分」卡或数值未按 fmtCredit 渲染:\n%s", stats)
-	}
-	if !strings.Contains(stats, "3 条样本") {
-		t.Fatalf("积分卡副标题应回显 usage.credit 样本数:\n%s", stats)
-	}
-	// 位置：请求数 → 总 token → 积分 → 平均缓存命中率 → prompt（主指标同排）。
-	iReq := strings.Index(stats, ">请求数<")
-	iTotal := strings.Index(stats, ">总 token<")
-	iCredit := strings.Index(stats, ">总积分<")
-	iHit := strings.Index(stats, ">平均缓存命中率<")
-	iPrompt := strings.Index(stats, ">prompt<")
-	if !(iReq >= 0 && iReq < iTotal && iTotal < iCredit && iCredit < iHit && iHit < iPrompt) {
-		t.Fatalf("卡片顺序应为 请求数 → 总 token → 积分 → 平均缓存命中率 → prompt:\n%s", stats)
-	}
-
-	if !strings.Contains(out.EmptyStats, "无样本") {
-		t.Fatalf("无积分样本时应提示「无样本」而不是伪造 0:\n%s", out.EmptyStats)
-	}
-	if !strings.Contains(out.EmptyStats, "无缓存观测样本") || !strings.Contains(out.EmptyStats, ">—<") {
-		t.Fatalf("无样本时应显示占位 — 与「无缓存观测样本」:\n%s", out.EmptyStats)
+	if !strings.Contains(out.EmptyStats, "无积分样本") || !strings.Contains(out.EmptyStats, "无缓存观测样本") || !strings.Contains(out.EmptyStats, ">—<") {
+		t.Fatalf("无样本必须保留未知状态: %s", out.EmptyStats)
 	}
 	// 脏值：'7200'/'x' 应按 Number() 归零/取值，不产生 NaN%。
 	if strings.Contains(out.DirtyStats, "NaN") {
@@ -139,20 +118,17 @@ func TestUsageOverviewCacheHitKPI(t *testing.T) {
 	}
 }
 
-// TestUsageOverviewK8Grid 钉住 index.html：usStats 用 k8 栅格（八卡一行）。
-func TestUsageOverviewK8Grid(t *testing.T) {
+// The ledger keeps cost metrics and does not expose another eight-card request overview.
+func TestUsageLedgerHasSingleCostSummary(t *testing.T) {
 	raw, err := os.ReadFile("index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(raw)
-	if !strings.Contains(html, `class="kpis k8" id="usStats"`) {
-		t.Fatal("usStats 容器应使用 kpis k8 栅格")
+	if strings.Contains(html, `id="usStats"`) {
+		t.Fatal("duplicate request KPIs remain in the ledger")
 	}
-	if !strings.Contains(html, ".kpis.k8 { grid-template-columns: repeat(8") {
-		t.Fatal("缺少 .kpis.k8 八列栅格规则")
-	}
-	if !strings.Contains(html, "@media (max-width: 700px) { .kpis, .kpis.k4, .kpis.k8 {") {
-		t.Fatal("窄屏断点应把 k8 一并折成 2 列")
+	if strings.Count(html, `id="usCreditStats"`) != 1 {
+		t.Fatal("cost summary must occur once")
 	}
 }

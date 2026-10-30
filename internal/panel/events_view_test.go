@@ -14,7 +14,7 @@ import (
 //  1. 读取失败必须说出来。原来 loadEvents 用 .catch(() => ({entries: []})) 把 501
 //     （归档未开启）和网络错误都变成「共 0 条事件」——和「真的没流量」长得一模一样，
 //     外层 try/catch 因此成了死代码。
-//  2. 表头 13 列与行内 13 个 <td> 必须一致，否则整张表错位。
+//  2. 表头 8 列与行内 8 个 <td> 必须一致，否则整张表错位。
 //
 // 两处都是纯前端、都看不见失败，所以用 node 跑真实函数而不是读源码断言。
 func TestAppJSEventsView(t *testing.T) {
@@ -33,7 +33,7 @@ function makeCtx(apiImpl) {
   const els = {};
   const el = (k) => (els[k] = els[k] || { textContent: '', value: '', innerHTML: '' });
   const ctx = {
-    rawEventsData: [],
+    encodeURIComponent, rawEventsData: [], eventPage:1, eventBusy:false, eventGeneration:0, filteredEventData:[],
     esc: (x) => String(x == null ? '' : x),
     $: el,
     setHTML: (node, html) => { node.innerHTML = html; },
@@ -77,6 +77,17 @@ async function run() {
   out.hasFakeKey = /Gra\*+cle@1!/.test(html);
   out.hasUpstreamLie = html.indexOf('上游响应') >= 0;
   out.cacheMiss = html.indexOf('未命中 6') >= 0;
+  const assert=require('assert');
+  c.ctx.get().push({time:'2026-10-26T10:01:00Z',request_id:'stream-failed',model:'wb-lite',status:200,ok:false,outcome:'stream_error'});
+  c.el('eventFilterStatus').value='error';c.ctx.render();
+  assert.ok(c.el('eventTableBody').innerHTML.includes('stream_error'),'HTTP 200 stream failure must stay an error');
+  c.el('eventFilterStatus').value='success';c.ctx.render();
+  assert.ok(!c.el('eventTableBody').innerHTML.includes('stream_error'));
+  c.el('eventFilterStatus').value='';
+  for(let i=0;i<39;i++)c.ctx.get().push({time:'2026-10-26T10:00:00Z',model:'wb-lite',ok:true,status:200});
+  c.ctx.render();assert.strictEqual((c.el('eventTableBody').innerHTML.match(/<tr>/g)||[]).length,10);
+  c.ctx.eventPage=5;c.ctx.render();assert.strictEqual((c.el('eventTableBody').innerHTML.match(/<tr>/g)||[]).length,1);
+  c.el('eventFilterModel').value='selected-model';c.ctx.populate([]);assert.ok(c.el('eventFilterModel').innerHTML.includes('selected-model'),'empty range must preserve the chosen filter');
   process.stdout.write(JSON.stringify(out));
 }
 run().catch(e => { console.error(e); process.exit(1); });`
@@ -124,8 +135,8 @@ run().catch(e => { console.error(e); process.exit(1); });`
 	if got.Rows != 1 {
 		t.Fatalf("应当渲染 1 行，实际 %d", got.Rows)
 	}
-	if got.Cells != 13 {
-		t.Errorf("行内列数应为 13（与表头一致），实际 %v", got.Cells)
+	if got.Cells != 8 {
+		t.Errorf("行内列数应为 8（与表头一致），实际 %v", got.Cells)
 	}
 	if got.HasFakeKey || got.HasUpstreamLie {
 		t.Errorf("伪造列回来了：假 key=%v 假上游模型=%v", got.HasFakeKey, got.HasUpstreamLie)
@@ -150,7 +161,7 @@ func TestEventsTableHeaderColumns(t *testing.T) {
 		seg = seg[:j]
 	}
 	n := len(regexp.MustCompile(`<th[ >]`).FindAllString(seg, -1))
-	if n != 13 {
-		t.Errorf("事件表表头应为 13 列，实际 %d", n)
+	if n != 8 {
+		t.Errorf("事件表表头应为 8 列，实际 %d", n)
 	}
 }

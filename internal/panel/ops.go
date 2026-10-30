@@ -33,20 +33,20 @@ func (p *Panel) opsMonitor(w http.ResponseWriter, r *http.Request) {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	var accounts any = []any{}
+	var locks any = []any{}
 	total, healthy, cooling, disabled, paused, full := 0, 0, 0, 0, 0, 0
 	if p.cfg.Pool != nil {
 		total, healthy, cooling, disabled, paused, full = p.cfg.Pool.CountsDetailedWithPaused()
 		accounts = p.cfg.Pool.List()
+		locks = p.cfg.Pool.ModelLockView()
 	}
-	logs := p.logs.Snapshot()
-	if len(logs) > 100 {
-		logs = logs[len(logs)-100:]
-	}
+	// Request details and system logs now have one canonical view each.
+	data.Recent, data.RecentErrors, data.Models = nil, nil, nil
 	writeJSON(w, 200, map[string]any{
 		"collected_at": now, "data": data,
 		"system":  map[string]any{"uptime_sec": int(time.Since(p.started).Seconds()), "goroutines": runtime.NumGoroutine(), "heap_bytes": mem.HeapAlloc, "runtime_bytes": mem.Sys, "gc_cycles": mem.NumGC, "redis_mode": p.cfg.RedisMode},
 		"pool":    map[string]any{"total": total, "healthy": healthy, "cooling": cooling, "disabled": disabled, "paused": paused, "full": full, "accounts": accounts},
 		"archive": p.cfg.RequestLog.Snapshot().Archive,
-		"jobs":    p.ListTaskJobs(), "logs": logs,
+		"jobs":    p.ListTaskJobs(), "model_locks": locks,
 	})
 }

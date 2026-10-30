@@ -414,7 +414,7 @@ const src = fs.readFileSync(process.argv[2], 'utf8');
 const escStart = src.indexOf('function esc(');
 const escEnd = src.indexOf('function ago(');
 const start = src.indexOf('function renderErrorSummary');
-const end = src.indexOf('function renderRequestMetrics');
+const end = src.indexOf('/* ── 积分历史');
 if ([escStart, escEnd, start, end].some(v => v < 0)) throw new Error('error summary region not found');
 const els = {};
 const ctx = { String, Math, $: id => (els[id] = els[id] || { innerHTML: '', textContent: '' }) };
