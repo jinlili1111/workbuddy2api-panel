@@ -137,7 +137,11 @@ func TestInstallReplacesRestartsAndRecovers(t *testing.T) {
 			// helper 是独立进程，观察窗口只能经环境变量注入（见 updater.childGrace）。
 			// 缩到 400ms：真值 8s 会让这条用例每个分支多等 8 秒。
 			t.Setenv("WB2API_UPDATE_GRACE_MS", strconv.Itoa(fixtureGraceMS))
-			target := filepath.Join(dir, "wb2api"+filepath.Ext(executable))
+			name := "wb2api"
+			if runtime.GOOS == "windows" {
+				name += ".exe"
+			}
+			target := filepath.Join(dir, name)
 			if err := os.WriteFile(target, original, 0700); err != nil {
 				t.Fatal(err)
 			}
